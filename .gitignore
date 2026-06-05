@@ -26,11 +26,6 @@ models/bert_model/
 # 输出目录
 output/
 
-# 数据集（太大，45+23+27 MB）
-dataset/*.csv
-!dataset/class.txt
-!dataset/metadata.json
-
 # 系统文件
 .DS_Store
 Thumbs.db
