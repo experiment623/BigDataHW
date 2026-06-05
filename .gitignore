@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 模型文件（太大，Git 不适合存）
+models/bert_model/
+*.pkl
+*.pt
+*.npz
+
+# 输出目录
+output/
+
+# 数据集（太大，45+23+27 MB）
+dataset/*.csv
+!dataset/class.txt
+!dataset/metadata.json
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.pdf
+
+# Jupyter
+.ipynb_checkpoints/
