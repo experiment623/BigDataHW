@@ -832,10 +832,8 @@ def main():
     # ===================== 最终报告 =====================
     print_final_report(mark_threshold, adv_threshold, adv_testset_threshold)
 
-    # ===================== 字形相似度分析 =====================
-    if not gca_skip:
     # ===================== 可视化 =====================
-        generate_all_visualizations(
+    generate_all_visualizations(
             raw_data=raw_data,
             proc_data=proc_data,
             ml_models=ml_models,
