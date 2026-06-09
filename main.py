@@ -844,9 +844,9 @@ def main():
             bert_results=bert_results_tuple
         )
 
-        print('\n' + '='*60)
-        print('  实验完成！')
-        print('='*60)
+    print('\n' + '='*60)
+    print('  实验完成！')
+    print('='*60)
 
 
 if __name__ == '__main__':
