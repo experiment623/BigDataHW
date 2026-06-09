@@ -835,20 +835,20 @@ def main():
     # ===================== 字形相似度分析 =====================
     if not gca_skip:
     # ===================== 可视化 =====================
-    generate_all_visualizations(
-        raw_data=raw_data,
-        proc_data=proc_data,
-        ml_models=ml_models,
-        ml_results=ml_results,
-        mlp_val=mlp_val,
-        mlp_test=mlp_test,
-        adv_results=adv_results,
-        bert_results=bert_results_tuple
-    )
+        generate_all_visualizations(
+            raw_data=raw_data,
+            proc_data=proc_data,
+            ml_models=ml_models,
+            ml_results=ml_results,
+            mlp_val=mlp_val,
+            mlp_test=mlp_test,
+            adv_results=adv_results,
+            bert_results=bert_results_tuple
+        )
 
-    print('\n' + '='*60)
-    print('  实验完成！')
-    print('='*60)
+        print('\n' + '='*60)
+        print('  实验完成！')
+        print('='*60)
 
 
 if __name__ == '__main__':
