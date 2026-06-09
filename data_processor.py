@@ -79,6 +79,58 @@ def load_vectorizer(path: str) -> TfidfVectorizer:
         return pickle.load(f)
 
 
+def stratified_sample(texts, labels, n_samples, random_state=42):
+    """
+    分层采样：保持类别分布的前提下，等比例抽取 n_samples 条样本
+
+    参数:
+        texts: 文本列表
+        labels: 标签列表
+        n_samples: 目标采样总数
+        random_state: 随机种子
+
+    返回:
+        (sampled_texts, sampled_labels)
+    """
+    from sklearn.model_selection import train_test_split
+    n_total = len(texts)
+    if n_samples >= n_total:
+        return texts, labels
+
+    # 按比例分层分割（train_test_split 的 stratify 保持分布）
+    _, sampled_texts, _, sampled_labels = train_test_split(
+        texts, labels,
+        train_size=(n_total - n_samples) / n_total,
+        stratify=labels,
+        random_state=random_state,
+        shuffle=True
+    )
+    # 取未被选入 train 的部分作为样本
+    return sampled_texts, sampled_labels
+
+
+def stratified_sample_indices(labels, n_samples, random_state=42):
+    """
+    分层采样返回索引（用于 numpy 数组/稀疏矩阵的下标采样）
+
+    返回:
+        indices: 采样索引数组
+    """
+    import numpy as np
+    from sklearn.model_selection import train_test_split
+    
+    n_total = len(labels)
+    if n_samples >= n_total:
+        return np.arange(n_total)
+    
+    indices = np.arange(n_total)
+    _, sampled_idx = train_test_split(
+        indices, train_size=(n_total - n_samples) / n_total,
+        stratify=labels, random_state=random_state, shuffle=True
+    )
+    return sampled_idx
+
+
 if __name__ == '__main__':
     # 快速测试
     train_texts, train_labels = load_data(TRAIN_PATH)

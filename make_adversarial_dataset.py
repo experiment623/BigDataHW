@@ -155,22 +155,44 @@ def url_obfuscation(text: str) -> str:
     return text + append
 
 
+# 拼音简写映射
+PINYIN_ABBREV_MAP = {
+    '微': 'v', '信': 'x', '支': 'z', '付': 'f', '宝': 'b',
+    '扣': 'k', '加': '+', '钱': 'q', '元': 'y',
+    '万': 'w', '新': 'x', '手': 's', '机': 'j',
+}
+
+
+def pinyin_abbreviation(text: str, ratio: float = 0.15) -> str:
+    """策略8：拼音首字母/符号简写 例: '微信'→'v信'"""
+    result = list(text)
+    for word, abbrev in [('微信', 'vx'), ('扣扣', 'qq')]:
+        if word in ''.join(result):
+            result = list(''.join(result).replace(word, abbrev))
+    n = len(result)
+    indices = random.sample(range(n), max(1, int(n * ratio)))
+    for idx in indices:
+        ch = result[idx]
+        if ch in PINYIN_ABBREV_MAP:
+            result[idx] = PINYIN_ABBREV_MAP[ch]
+    return ''.join(result)
+
+
 # 攻击策略注册表
 ATTACK_STRATEGIES = [
-    (1, 'char_sub',   '形近字替换',   lambda t: char_similar_substitution(t)),
-    (2, 'char_del',   '随机删字',     lambda t: char_deletion(t)),
-    (3, 'char_ins',   '插入无关字符', lambda t: char_insertion(t)),
-    (4, 'text_mask',  '关键词掩码',   lambda t: text_masking(t)),
-    (5, 'add_filler', '正常文本伪装', lambda t: add_filler_text(t)),
-    (6, 'num_obf',    '数字全角混淆', lambda t: number_obfuscation(t)),
-    (7, 'url_obf',    '伪装URL添加',  lambda t: url_obfuscation(t)),
+    (1, 'char_sub',   '形近字替换',     lambda t: char_similar_substitution(t)),
+    (2, 'char_del',   '随机删字',       lambda t: char_deletion(t)),
+    (3, 'char_ins',   '插入无关字符',   lambda t: char_insertion(t)),
+    (4, 'text_mask',  '关键词掩码',     lambda t: text_masking(t)),
+    (5, 'add_filler', '正常文本伪装',   lambda t: add_filler_text(t)),
+    (6, 'num_obf',    '数字全角混淆',   lambda t: number_obfuscation(t)),
+    (7, 'url_obf',    '伪装URL添加',    lambda t: url_obfuscation(t)),
+    (8, 'pinyin_abv', '拼音字母简写',   lambda t: pinyin_abbreviation(t)),  # 新增
 ]
 
 ATTACK_TARGET_MAP = {
-    # label=0 正常文本：只做轻微扰动（插入/掩码），不生成欺诈类攻击
-    0: [3, 4],  # char_ins, text_mask
-    # label!=0 欺诈文本：使用全部 7 种攻击
-    1: [1, 2, 3, 4, 5, 6, 7],
+    0: [3, 4],              # 正常: 插入+掩码
+    1: [1, 2, 3, 4, 5, 6, 7, 8],  # 欺诈: 全部8种
 }
 
 

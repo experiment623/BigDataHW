@@ -24,7 +24,9 @@ warnings.filterwarnings('ignore')
 
 from config import (
     TRAIN_PATH, VAL_PATH, TEST_PATH, OUTPUT_DIR, MODEL_DIR, DATASET_DIR,
-    RANDOM_SEED, LABEL_MAP, NUM_CLASSES, BERT_MODEL_NAME
+    RANDOM_SEED, LABEL_MAP, NUM_CLASSES, BERT_MODEL_NAME, N_FOLDS,
+    SUBSET_TRAIN_SIZE, SUBSET_BERT_TRAIN, SUBSET_BERT_VAL, SUBSET_BERT_TEST,
+    GLYPH_WEIGHT, CONTRAST_WEIGHT, GCA_EPOCHS,
 )
 from data_processor import (
     load_data, clean_text, tokenize, preprocess_texts,
@@ -34,7 +36,6 @@ from adversarial import (
     build_adversarial_dataset, evaluate_on_adversarial
 )
 from visualize import generate_all_visualizations
-from models.gca_net import analyze_glyph_similarity
 
 # 模型模块
 from models import (
@@ -45,9 +46,40 @@ from models import (
     Word2VecCharGBDT, Doc2VecCharGBDT, GAS,
     GCANet,
     evaluate_model, compare_models, evaluate_with_confidence_threshold,
+    cross_validate,
 )
+from config import CV_MODELS, CV_SAMPLE_SIZE
 
 np.random.seed(RANDOM_SEED)
+
+
+# ========== 辅助函数：消除重复代码 ==========
+
+def _model_predict(model, X_tfidf=None, texts=None):
+    """统一预测接口：根据 model.input_type 自动选择输入格式"""
+    if model.input_type == 'text' and texts is not None:
+        return np.array(model.predict(texts))
+    return np.array(model.predict(X_tfidf))
+
+
+def _model_predict_proba(model, X_tfidf=None, texts=None):
+    """统一概率预测接口"""
+    if model.input_type == 'text' and texts is not None:
+        return model.predict_proba(texts)
+    return model.predict_proba(X_tfidf)
+
+
+def _prepare_subset(texts, labels, X_tfidf, n_samples):
+    """分层采样子集（保持类别分布）"""
+    from data_processor import stratified_sample_indices
+    if n_samples is None or n_samples >= len(texts):
+        return texts, labels, X_tfidf
+    
+    indices = stratified_sample_indices(labels, n_samples, RANDOM_SEED)
+    sub_texts = [texts[i] for i in indices]
+    sub_labels = labels[indices]
+    sub_X = X_tfidf[indices] if hasattr(X_tfidf, '__getitem__') else X_tfidf
+    return sub_texts, sub_labels, sub_X
 
 
 def step1_load_data():
@@ -189,18 +221,11 @@ def step4_train_pdf_baselines(proc_data, ml_models, ml_results):
     val_texts = proc_data['val_texts']
     test_texts = proc_data['test_texts']
 
-    # 对 Word2Vec/Doc2Vec 模型使用子集（这些模型训练较慢）
-    USE_SUBSET = True
-    if USE_SUBSET:
-        n_sub = min(30000, len(train_texts))
-        indices = np.random.choice(len(train_texts), n_sub, replace=False)
-        sub_texts = [train_texts[i] for i in indices]
-        sub_y = y_train[indices]
-        sub_X = X_train[indices]
-    else:
-        sub_texts = train_texts
-        sub_y = y_train
-        sub_X = X_train
+    # 对 Word2Vec/Doc2Vec 模型使用分层采样子集（保持类别分布）
+    sub_texts, sub_y, sub_X = _prepare_subset(
+        train_texts, y_train, X_train, SUBSET_TRAIN_SIZE
+    )
+    print(f'  子集大小: {len(sub_texts)}, 标签分布: {dict(pd.Series(sub_y).value_counts().sort_index())}')
 
     pdf_models = [
         Word2VecWordLR(vec_dim=200),       # 1. Word2Vec-w+LR
@@ -288,31 +313,18 @@ def step5_train_bert(proc_data):
     test_texts = proc_data['test_texts']
     test_labels = proc_data['y_test']
 
-    # 使用子集来加速（可选：全量训练）
-    USE_SUBSET = True
-    if USE_SUBSET:
-        n_train_sub = min(20000, len(train_texts))
-        n_val_sub = min(5000, len(val_texts))
-        n_test_sub = min(5000, len(test_texts))
-        # 保持类别分布
-        print(f'  使用子集: train={n_train_sub}, val={n_val_sub}, test={n_test_sub}')
-        # 简单采样
-        indices_train = np.random.choice(len(train_texts), n_train_sub, replace=False)
-        indices_val = np.random.choice(len(val_texts), n_val_sub, replace=False)
-        indices_test = np.random.choice(len(test_texts), n_test_sub, replace=False)
-        sub_train_texts = [train_texts[i] for i in indices_train]
-        sub_train_labels = train_labels[indices_train]
-        sub_val_texts = [val_texts[i] for i in indices_val]
-        sub_val_labels = val_labels[indices_val]
-        sub_test_texts = [test_texts[i] for i in indices_test]
-        sub_test_labels = test_labels[indices_test]
-    else:
-        sub_train_texts = train_texts
-        sub_train_labels = train_labels
-        sub_val_texts = val_texts
-        sub_val_labels = val_labels
-        sub_test_texts = test_texts
-        sub_test_labels = test_labels
+    # 使用分层采样子集（保持类别分布，避免少数类丢失）
+    sub_train_texts, sub_train_labels, _ = _prepare_subset(
+        train_texts, train_labels, None, SUBSET_BERT_TRAIN
+    )
+    sub_val_texts, sub_val_labels, _ = _prepare_subset(
+        val_texts, val_labels, None, SUBSET_BERT_VAL
+    )
+    sub_test_texts, sub_test_labels, _ = _prepare_subset(
+        test_texts, test_labels, None, SUBSET_BERT_TEST
+    )
+    print(f'  BERT 子集: train={len(sub_train_texts)}, val={len(sub_val_texts)}, test={len(sub_test_texts)}')
+    print(f'    训练集标签分布: {dict(pd.Series(sub_train_labels).value_counts().sort_index())}')
 
     bert = BERTClassifier(model_name=BERT_MODEL_NAME, num_classes=NUM_CLASSES)
 
@@ -370,19 +382,17 @@ def step_adv_testset_eval(trained_models, proc_data):
     print(f'\n  评估 所有模型...')
     overall_results = []
     attack_detail = {}
+    adv_texts_list = adv_df['adv_text'].tolist()
 
     for name, model in trained_models.items():
-        # 选择输入
-        if 'BERT' in name:
-            texts = adv_df['adv_text'].tolist()
-            y_pred = model.predict(texts)
+        # 根据 model.input_type 自动选择输入格式
+        if model.input_type == 'text':
+            y_pred = _model_predict(model, texts=adv_texts_list)
         else:
             if X_adv_vec is None:
                 print(f'    [跳过] {name}: 无向量化数据')
                 continue
-            y_pred = model.predict(X_adv_vec)
-
-        y_pred = np.array(y_pred)
+            y_pred = _model_predict(model, X_tfidf=X_adv_vec)
 
         # 总体指标
         overall_results.append({
@@ -434,10 +444,9 @@ def step_adv_testset_eval(trained_models, proc_data):
     print(f'\n  计算对抗测试集置信度阈值指标...')
     adv_test_threshold = []
     for name, model in trained_models.items():
-        # 选择输入
-        if 'BERT' in name:
-            r90 = evaluate_with_confidence_threshold(model, adv_df['adv_text'].tolist(), y_adv, 0.90)
-            r95 = evaluate_with_confidence_threshold(model, adv_df['adv_text'].tolist(), y_adv, 0.95)
+        if model.input_type == 'text':
+            r90 = evaluate_with_confidence_threshold(model, adv_texts_list, y_adv, 0.90)
+            r95 = evaluate_with_confidence_threshold(model, adv_texts_list, y_adv, 0.95)
         elif X_adv_vec is not None:
             r90 = evaluate_with_confidence_threshold(model, X_adv_vec, y_adv, 0.90)
             r95 = evaluate_with_confidence_threshold(model, X_adv_vec, y_adv, 0.95)
@@ -487,11 +496,9 @@ def step6_adversarial_eval(trained_models, proc_data):
     adv_results = {}
 
     for name, model in trained_models.items():
-        if 'BERT' in name:
-            # BERT 用原始文本
+        if model.input_type == 'text':
             df, acc = evaluate_on_adversarial(model, adv_texts, adv_labels, adv_attack_types)
         else:
-            # TF-IDF 模型用向量
             df, acc = evaluate_on_adversarial(model, X_adv, adv_labels, adv_attack_types)
         adv_results[name] = {'accuracy': acc, 'detail': df}
 
@@ -523,8 +530,7 @@ def step7_confidence_threshold_eval(trained_models, proc_data, adv_texts, adv_la
     mark_results = []
     for name, model in trained_models.items():
         print(f'  评估: {name}')
-        if 'BERT' in name:
-            # BERT 用文本
+        if model.input_type == 'text':
             r90 = evaluate_with_confidence_threshold(model, test_texts, y_test, threshold=0.90)
             r95 = evaluate_with_confidence_threshold(model, test_texts, y_test, threshold=0.95)
         else:
@@ -543,7 +549,7 @@ def step7_confidence_threshold_eval(trained_models, proc_data, adv_texts, adv_la
     for name, model in trained_models.items():
         print(f'  评估: {name}')
 
-        if 'BERT' in name:
+        if model.input_type == 'text':
             r90 = evaluate_with_confidence_threshold(model, adv_texts, adv_labels, threshold=0.90)
             r95 = evaluate_with_confidence_threshold(model, adv_texts, adv_labels, threshold=0.95)
         else:
@@ -609,69 +615,55 @@ def print_final_report(mark_results, adv_threshold_results, adv_testset_threshol
 
 def step8_train_gca(proc_data):
     """
-    步骤8: 训练创新模型 GCA-Net（字形对比对齐网络）
-    
-    GCA-Net 的核心创新:
-    - 中文字符 → 部首+拼音+结构+笔画 四维特征分解
-    - GlyphEmbedding 将离散字符转为字形感知嵌入
-    - 对比学习拉近形近/音近字、推远无关字
-    - 与 TF-IDF 语义特征融合，兼顾语义+字形
+    步骤8: GCA-Net v5 — 字形-字音-语义三模态联合对抗预训练
+
+    四个预训练损失:
+      L_tri       — 三模态锚点对齐 (拉近同字g/p/s)
+      L_inv_sent  — 原文-变体全局对比
+      L_sem_confl — 语义冲突推远 (惠/慧 等)
+      L_disc      — 跨模态字符判别 (从变体推理原字)
+
+    微调: 冻结主干 + 2层MLP分类器
     """
     print('\n' + '='*60)
-    print('  [步骤8] 训练 GCA-Net 创新模型')
-    print('  ★ 字形对比对齐网络 (Glyph-Contrastive Alignment Network)')
-    print('  ★ 方法: 字符分解 → 字形嵌入 → 对比学习 → 语义融合')
+    print('  [步骤8] 训练 GCA-Net (v5 三模态)')
+    print('  ★ 字形流: 32×32渲染 → CNN → 512维')
+    print('  ★ 字音流: pinyin序列 → 1D-CNN+BiLSTM → 512维')
+    print('  ★ 语义流: 可学习嵌入 → MLP → 512维')
+    print('  ★ 预训练: 对抗变体生成 + 四损失联合优化')
     print('='*60)
-    
-    X_train = proc_data['X_train']
-    y_train = proc_data['y_train']
-    X_val = proc_data['X_val']
-    y_val = proc_data['y_val']
-    X_test = proc_data['X_test']
-    y_test = proc_data['y_test']
+
+    X_train, y_train = proc_data['X_train'], proc_data['y_train']
+    X_val, y_val = proc_data['X_val'], proc_data['y_val']
+    X_test, y_test = proc_data['X_test'], proc_data['y_test']
     train_texts = proc_data['train_texts']
-    val_texts = proc_data['val_texts']
-    test_texts = proc_data['test_texts']
-    
-    # 使用子集训练（加速）
-    USE_SUBSET = True
-    if USE_SUBSET:
-        n_sub = min(30000, len(train_texts))
-        indices = np.random.choice(len(train_texts), n_sub, replace=False)
-        sub_X = X_train[indices]
-        sub_y = y_train[indices]
-        sub_texts = [train_texts[i] for i in indices]
-    else:
-        sub_X = X_train
-        sub_y = y_train
-        sub_texts = train_texts
-    
-    # 构建模型
-    gca = GCANet(name='GCA-Net (Glyph+TF-IDF)')
-    
-    t0 = time.time()
-    gca.fit(
-        X_tfidf=sub_X,
-        y=sub_y,
-        texts=sub_texts,
-        epochs=15,
-        batch_size=64,
-        lr=1e-3,
-        glyph_weight=0.3,
-        contrast_weight=0.1
+
+    # 分层采样子集
+    sub_texts, sub_y, sub_X = _prepare_subset(
+        train_texts, y_train, X_train, SUBSET_TRAIN_SIZE
     )
-    t1 = time.time()
-    print(f'  训练耗时: {t1-t0:.1f}s')
-    
-    # 评估
-    print(f'\n--- GCA-Net 性能评估 ---')
-    from models.evaluation import evaluate_model
+    print(f'  子集: {len(sub_texts)} 条')
+
+    gca = GCANet(name='GCA-Net (Glyph+Phonetic+Semantic)', glyph_weight=GLYPH_WEIGHT)
+    t0 = time.time()
+
+    # Phase I: 三模态联合对抗预训练
+    print('\n--- Phase I: 三模态对抗预训练 ---')
+    gca.pretrain(texts=sub_texts, epochs=10, batch_size=32, lr=5e-4)
+
+    # Phase II: 微调
+    print('\n--- Phase II: 冻结主干 + 微调分类器 ---')
+    gca.fit(
+        X_tfidf=sub_X, y=sub_y, texts=sub_texts,
+        epochs=min(GCA_EPOCHS, 10), batch_size=32, lr=1e-3,
+        glyph_weight=GLYPH_WEIGHT, contrast_weight=CONTRAST_WEIGHT
+    )
+    print(f'  总训练耗时: {time.time()-t0:.1f}s')
+
     r_val = evaluate_model(gca, X_val, y_val)
     r_test = evaluate_model(gca, X_test, y_test)
-    
-    # 保存
     gca.save(os.path.join(MODEL_DIR, 'gca_net_model.pt'))
-    
+
     return gca, r_val, r_test
 
 
@@ -735,6 +727,28 @@ def main():
 
     # Step 3: 传统 ML Baseline (TF-IDF+LR/SVC/RF/NB)
     ml_models, ml_results = step3_train_traditional_ml(proc_data)
+
+    # ===== Step 3.5: 交叉验证（增强实验可信度）=====
+    cv_results = {}
+    X_train = proc_data['X_train']
+    y_train = proc_data['y_train']
+    X_cv = X_train[:CV_SAMPLE_SIZE]
+    y_cv = y_train[:CV_SAMPLE_SIZE]
+
+    for model_name in CV_MODELS:
+        if model_name in ml_models:
+            print(f'\n{"="*60}')
+            print(f'  [交叉验证] {model_name} ({N_FOLDS}-Fold)')
+            print(f'{"="*60}')
+            factory_map = {
+                'TF-IDF + LogisticRegression': TfidfLogisticRegression,
+                'TF-IDF + LinearSVC': TfidfLinearSVC,
+            }
+            if model_name in factory_map:
+                cv_summary = cross_validate(
+                    lambda: factory_map[model_name](), X_cv, y_cv
+                )
+                cv_results[model_name] = cv_summary
 
     # Step 4: PDF 论文 5 个经典 Baseline (Word2Vec/Doc2Vec/GAS)
     ml_models, ml_results = step4_train_pdf_baselines(proc_data, ml_models, ml_results)
@@ -820,8 +834,6 @@ def main():
 
     # ===================== 字形相似度分析 =====================
     if not gca_skip:
-        analyze_glyph_similarity()
-
     # ===================== 可视化 =====================
     generate_all_visualizations(
         raw_data=raw_data,

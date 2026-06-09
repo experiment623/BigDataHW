@@ -241,14 +241,19 @@ def generate_all_visualizations(raw_data, proc_data, ml_models, ml_results,
     # 3. 混淆矩阵（对每个模型在测试集上生成）
     X_test = proc_data['X_test']
     y_test = proc_data['y_test']
+    test_texts = proc_data.get('test_texts', [])
     for name, model in ml_models.items():
-        if 'BERT' in name:
-            # BERT 用文本
+        if model.input_type == 'text':
+            # 文本输入模型
             _, _, bert_data = bert_results if bert_results else (None, None, None)
-            if bert_data:
+            if bert_data and 'BERT' in name:
                 _, _, sub_test_texts, sub_test_labels = bert_data
                 y_pred = model.predict(sub_test_texts)
                 plot_confusion_matrix(sub_test_labels, y_pred, name)
+            else:
+                # Word2Vec/Doc2Vec 等文本模型用全量测试文本
+                y_pred = model.predict(test_texts)
+                plot_confusion_matrix(y_test, y_pred, name)
         else:
             y_pred = model.predict(X_test)
             plot_confusion_matrix(y_test, y_pred, name)

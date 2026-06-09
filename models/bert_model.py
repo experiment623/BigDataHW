@@ -11,7 +11,7 @@ class BERTClassifier(BaseModel):
     def __init__(self, model_name: str = 'bert-base-chinese',
                  num_classes: int = NUM_CLASSES, max_len: int = 256,
                  batch_size: int = 16):
-        super().__init__(f'BERT({model_name})')
+        super().__init__(f'BERT({model_name})', input_type='text')
         self.model_name = model_name
         self.num_classes = num_classes
         self.max_len = max_len

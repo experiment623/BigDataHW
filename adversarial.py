@@ -10,19 +10,30 @@ from config import ADVERSARIAL_RATIO, ADVERSARIAL_NUM, RANDOM_SEED, LABEL_MAP
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 
-# ----- 形近字字典（部分示例，基于 Unicode 形近字符） -----
+# ----- 形近字字典（基于 Unicode 异体/形近字符） -----
 HOMOGRAPH_MAP = {
+    # 数字大写
     '零': '〇', '一': '壹', '二': '贰', '三': '叁', '四': '肆', '五': '伍',
     '六': '陆', '七': '柒', '八': '捌', '九': '玖', '十': '拾',
     '万': '萬', '千': '仟', '百': '佰',
-    '元': '圆', '块': '元', '钱': '銭',
-    '卡': '咔', '证': '証', '贷': '貸', '款': '欵',
-    '药': '薬', '博': '愽', '彩': '採', '赌': '賭',
-    '码': '碼', '微': '薇', '信': '伩', '加': '伽',
-    '电': '電', '话': '話', '手': '扌',
+    # 金融/欺诈常见字
+    '元': '圆', '块': '元', '钱': '銭', '付': '付', '费': '費',
+    '卡': '咔', '证': '証', '贷': '貸', '款': '欵', '欠': '欠',
+    # 药品/博彩/色情
+    '药': '薬', '博': '愽', '彩': '採', '赌': '賭', '色': '脃',
+    '码': '碼', '微': '薇', '信': '伩', '加': '伽', '群': '羣',
+    '电': '電', '话': '話', '手': '扌', '网': '網', '视': '視',
+    # 扩展形近字（Unicode CJK Compatibility）
+    '国': '國', '对': '対', '写': '冩', '买': '買', '卖': '賣',
+    '号': '號', '学': '學', '宝': '寶', '实': '實', '专': '專',
+    '业': '業', '发': '發', '报': '報', '车': '車', '转': '轉',
+    '账': '賬', '账': '帳', '银': '銀', '行': '行', '提': '提',
+    '现': '現', '点': '點', '击': '擊', '链': '鏈', '接': '接',
+    '红': '紅', '包': '飽', '赠': '贈', '送': '餸', '免': '俛',
+    '费': '費', '优': '優', '惠': '憄', '秒': '皊', '杀': '殺',
 }
 
-# ----- 中文同音近音字（部分） -----
+# ----- 中文同音近音字（扩展版） -----
 HOMOPHONE_MAP = {
     '博': '搏', '彩': '采', '赌': '堵', '码': '马', '号': '好',
     '加': '家', '微': '危', '信': '心', '贷': '代', '款': '宽',
@@ -30,6 +41,11 @@ HOMOPHONE_MAP = {
     '下': '夏', '中': '忠', '上': '尚', '大': '达', '小': '晓',
     '新': '辛', '快': '块', '来': '莱', '手': '首', '网': '往',
     '送': '宋', '出': '初', '入': '如', '开': '凯', '关': '冠',
+    # 扩展同音字
+    '提': '题', '现': '线', '点': '典', '秒': '妙', '包': '保',
+    '红': '宏', '免': '棉', '费': '飞', '优': '幽', '惠': '慧',
+    '专': '砖', '业': '页', '银': '吟', '转': '赚', '接': '街',
+    '赠': '曾', '群': '裙', '发': '罚', '国': '果', '买': '埋',
 }
 
 # ----- 混淆字符（看起来像但不同的字符） -----
@@ -137,6 +153,40 @@ def url_obfuscation(text: str) -> str:
     return text + append
 
 
+# ----- 拼音/字母简写映射 (策略8) -----
+PINYIN_ABBREV_MAP = {
+    '微': 'v',     '信': 'x',      '微信': 'vx',
+    '支': 'z',     '付': 'f',      '宝': 'b',
+    '扣': 'k',     '扣扣': 'kk',   '扣扣': 'qq',
+    '加': '+',     '钱': 'q',      '元': 'y',
+    '万': 'w',     '新': 'x',      '人': 'r',
+    '手': 's',     '机': 'j',
+}
+
+
+def pinyin_abbreviation(text: str, ratio: float = 0.15) -> str:
+    """
+    策略8：拼音首字母/简写替换
+    将部分关键词替换为拼音首字母或符号简写
+    例: '微信'→'v信'  '支付宝'→'z付b'  '加微信'→'+vx'
+    """
+    result = list(text)
+    n = len(result)
+    # 对较长词先做整体替换
+    for word, abbrev in [('微信', 'vx'), ('扣扣', 'qq')]:
+        if word in text and random.random() < 0.5:
+            result = ''.join(result).replace(word, abbrev)
+            result = list(result)
+    
+    # 单个字符替换
+    indices = random.sample(range(n), max(1, int(n * ratio)))
+    for idx in indices:
+        ch = result[idx]
+        if ch in PINYIN_ABBREV_MAP:
+            result[idx] = PINYIN_ABBREV_MAP[ch]
+    return ''.join(result)
+
+
 def generate_adversarial_sample(text: str, label: int) -> list:
     """
     对一个文本生成多种对抗变体
@@ -151,6 +201,7 @@ def generate_adversarial_sample(text: str, label: int) -> list:
         variants.append((number_obfuscation(text), label, 'num_obf'))
         variants.append((add_filler_text(text), label, 'add_filler'))
         variants.append((url_obfuscation(text), label, 'url_obf'))
+        variants.append((pinyin_abbreviation(text), label, 'pinyin_abv'))  # 新增
     else:
         # 正常文本加轻微扰动
         variants.append((char_insertion(text), label, 'char_ins'))

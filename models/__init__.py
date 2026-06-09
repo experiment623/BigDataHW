@@ -17,7 +17,7 @@ from .pdf_baselines import (
     GAS,                 # GAS (GCN-based)
 )
 from .gca_net import GCANet
-from .evaluation import evaluate_model, compare_models, evaluate_with_confidence_threshold
+from .evaluation import evaluate_model, compare_models, evaluate_with_confidence_threshold, cross_validate
 
 __all__ = [
     'BaseModel',
@@ -30,4 +30,5 @@ __all__ = [
     'GAS',
     'GCANet',
     'evaluate_model', 'compare_models', 'evaluate_with_confidence_threshold',
+    'cross_validate',
 ]

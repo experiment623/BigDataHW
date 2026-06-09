@@ -12,7 +12,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, HistGradientBoostingClassifier
 from config import RANDOM_SEED, NUM_CLASSES
 from .base import BaseModel
 
@@ -30,7 +30,7 @@ class Word2VecWordLR(BaseModel):
       4. LogisticRegression 分类
     """
     def __init__(self, vec_dim: int = 200, window: int = 5):
-        super().__init__('Word2Vec-w+LR')
+        super().__init__('Word2Vec-w+LR', input_type='text')
         self.vec_dim = vec_dim
         self.window = window
         self.w2v_model = None
@@ -167,7 +167,7 @@ class Word2VecCharLR(BaseModel):
     字符级：将文本按字符切分（包含标点），训练字符级 Word2Vec
     """
     def __init__(self, vec_dim: int = 200, window: int = 3):
-        super().__init__('Word2Vec-c+LR')
+        super().__init__('Word2Vec-c+LR', input_type='text')
         self.vec_dim = vec_dim
         self.window = window
         self.w2v_model = None
@@ -289,16 +289,17 @@ class Word2VecCharGBDT(BaseModel):
     但分类器换为 GBDT（树模型），适合处理字符级特征的复杂非线性关系
     """
     def __init__(self, vec_dim: int = 200, window: int = 3):
-        super().__init__('Word2Vec-c+GBDT')
+        super().__init__('Word2Vec-c+GBDT', input_type='text')
         self.vec_dim = vec_dim
         self.window = window
         self.w2v_model = None
         self.idf = {}
         self.char_to_idx = {}
-        self.model = GradientBoostingClassifier(
-            n_estimators=200, max_depth=6,
-            learning_rate=0.1, subsample=0.8,
+        self.model = HistGradientBoostingClassifier(
+            max_iter=200, max_depth=6,
+            learning_rate=0.1, max_bins=255,
             random_state=RANDOM_SEED,
+            class_weight='balanced',
         )
 
     def _char_split(self, texts):
@@ -398,15 +399,16 @@ class Doc2VecCharGBDT(BaseModel):
     与 Word2Vec 的"词平均"不同，Doc2Vec 直接在训练中学习文档表示
     """
     def __init__(self, vec_dim: int = 200, window: int = 3, epochs: int = 20):
-        super().__init__('Doc2Vec-c+GBDT')
+        super().__init__('Doc2Vec-c+GBDT', input_type='text')
         self.vec_dim = vec_dim
         self.window = window
         self.epochs = epochs
         self.doc_model = None
-        self.model = GradientBoostingClassifier(
-            n_estimators=200, max_depth=6,
-            learning_rate=0.1, subsample=0.8,
+        self.model = HistGradientBoostingClassifier(
+            max_iter=200, max_depth=6,
+            learning_rate=0.1, max_bins=255,
             random_state=RANDOM_SEED,
+            class_weight='balanced',
         )
 
     def _char_split(self, texts):

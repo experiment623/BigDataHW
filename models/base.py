@@ -6,10 +6,16 @@ import numpy as np
 
 
 class BaseModel:
-    """所有模型的基类"""
-    def __init__(self, name: str):
+    """所有模型的基类
+
+    input_type 定义模型的期望输入格式:
+        'tfidf' - 接受 TF-IDF 稀疏/稠密矩阵
+        'text'  - 接受原始文本字符串列表
+    """
+    def __init__(self, name: str, input_type: str = 'tfidf'):
         self.name = name
         self.model = None
+        self.input_type = input_type  # 'tfidf' 或 'text'
 
     def fit(self, X, y):
         raise NotImplementedError
