@@ -8,13 +8,50 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端，适合服务器环境
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 from config import OUTPUT_DIR, LABEL_MAP
 
 
-# 全局风格设置
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'DejaVu Sans']
+def _find_chinese_font():
+    """自动搜索系统中的中文字体"""
+    # 1. 先找系统已安装的字体
+    all_fonts = {f.name: f.fname for f in fm.fontManager.ttflist}
+    for name in ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
+                 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans SC',
+                 'Droid Sans Fallback', 'AR PL UMing CN', 'Source Han Sans CN']:
+        if name in all_fonts:
+            return all_fonts[name]
+
+    # 2. 搜常见路径
+    paths = [
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+        '/usr/share/fonts/truetype/arphic/uming.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+        '/System/Library/Fonts/PingFang.ttc',
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            return p
+
+    return None
+
+
+_font_path = _find_chinese_font()
+if _font_path:
+    fm.fontManager.addfont(_font_path)
+    _font_name = fm.FontProperties(fname=_font_path).get_name()
+    plt.rcParams['font.sans-serif'] = [_font_name, 'DejaVu Sans']
+    print(f'[Visualize] 中文字体: {_font_name} ({_font_path})')
+else:
+    plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+    print('[Visualize] ⚠ 未找到中文字体! 图表中文会显示为方块')
+    print('  安装: apt-get install fonts-wqy-microhei (Linux)')
+    print('  或手动下载字体放到 /usr/share/fonts/ 下')
+
 plt.rcParams['axes.unicode_minus'] = False
 sns.set_style('whitegrid')
 
