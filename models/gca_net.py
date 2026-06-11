@@ -17,6 +17,10 @@ GCA-Net v5: 字形-字音-语义三模态联合对抗变体感知预训练
 """
 import os, re, math, random
 import numpy as np
+import torch
+import torch.nn as nn
+
+from .base import BaseModel
 
 
 def _find_chinese_font():
@@ -32,65 +36,122 @@ def _find_chinese_font():
 
 
 # ===================================================================
-# Part 1: 对抗变体生成 (预训练阶段用)
+# Part 1: 对抗变体生成 (预训练 + 数据集生成共用)
 # ===================================================================
 
+# 形近字 (视觉相似, Unicode异体/简繁/形似)
 SHAPE_CONFUSE = {
     '证':'証','贷':'貸','款':'欵','药':'薬','博':'愽','彩':'採',
     '赌':'賭','码':'碼','微':'薇','信':'伩','加':'伽','电':'電',
     '话':'話','元':'圆','万':'萬','千':'仟','百':'佰','钱':'銭',
     '一':'壹','二':'贰','六':'陆','七':'柒','八':'捌','九':'玖',
+    '五':'伍','十':'拾','国':'國','写':'冩','买':'買','卖':'賣',
+    '对':'対','号':'號','学':'學','专':'專','业':'業','发':'發',
+    '账':'賬','银':'銀','现':'現','点':'點','击':'擊','链':'鏈',
+    '费':'費','优':'優','红':'紅','免':'免','秒':'秒','杀':'殺',
+    '包':'飽','赠':'贈','送':'餸','惠':'憄',
 }
+
+# 同音/近音字
 SOUND_CONFUSE = {
     '博':'搏','彩':'采','赌':'堵','码':'马','证':'正','贷':'代',
     '款':'宽','药':'要','钱':'前','微':'危','信':'心','下':'夏',
-    '中':'忠','小':'晓','快':'块','加':'家','元':'原',
+    '中':'忠','小':'晓','快':'块','加':'家','元':'原','提':'题',
+    '出':'初','入':'如','开':'凯','关':'冠','网':'往','送':'宋',
+    '来':'莱','手':'首','新':'辛','大':'达','上':'尚','会':'慧',
+    '现':'线','点':'典','秒':'妙','红':'宏','费':'飞','优':'幽',
+    '接':'街','赠':'曾','群':'裙','转':'赚',
 }
-SEMANTIC_CONFLICT = {  # 同音/形近但语义冲突
-    '惠':'慧', '账':'障', '贷':'待', '款':'宽', '博':'薄',
+
+# 语义冲突 (同音但语义相反/不相关)
+SEMANTIC_CONFLICT = {
+    '惠':'慧', '账':'障', '贷':'待', '博':'薄',
     '证':'政', '码':'蚂', '包':'抱', '加':'假', '费':'废',
-    '元':'员', '信':'欣', '提':'题',
+    '元':'员', '信':'欣', '提':'题', '卡':'咖',
+    '药':'邀', '钱':'迁', '款':'髋', '赌':'杜',
+}
+
+# 拼音简写 → 原词 (预训练时还原, 避免模型学到错误映射)
+PINYIN_ABBREV_RESTORE = {
+    'v': '微', 'vx': '微信', 'wx': '微信',
+    'z': '支', 'f': '付', 'b': '宝', 'q': '钱',
+    '+': '加', 'k': '扣', 's': '手', 'j': '机',
 }
 
 
-def generate_adversarial_variant(text, p=0.4, replace_ratio=0.15):
+def restore_pinyin_abbrev(text):
+    """拼音简写还原: 'v信'→'微信', 'z付b'→'支付宝'"""
+    # 先做多字匹配
+    for abbrev, full in sorted(PINYIN_ABBREV_RESTORE.items(), key=lambda x: -len(x[0])):
+        if len(abbrev) > 1:
+            text = text.replace(abbrev, full)
+    # 再做单字匹配
+    for abbrev, full in PINYIN_ABBREV_RESTORE.items():
+        if len(abbrev) == 1:
+            text = text.replace(abbrev, full)
+    return text
+
+
+def generate_adversarial_variant(text, p=None, replace_ratio=None):
     """
-    预训练期间的对抗变体生成
-    p: 应用变体替换的概率
-    replace_ratio: 替换字符比例
-    返回: (variant_text, positions, original_chars, replaced_chars, conflict_flags)
+    多样化对抗变体生成 (预训练用)
+
+    随机化参数避免过拟合到特定攻击模式:
+      p:             应用替换概率, 默认随机 [0.3, 0.5]
+      replace_ratio: 替换比例, 默认随机 [0.08, 0.20]
+
+    攻击类型分布 (每次随机):
+      形近替换  ~50%
+      同音替换  ~30%
+      语义冲突  ~15%
+      随机删除  ~5%
     """
+    if p is None:
+        p = random.uniform(0.30, 0.50)
+    if replace_ratio is None:
+        replace_ratio = random.uniform(0.08, 0.20)
+
     if random.random() > p:
         return text, [], [], [], []
 
     chars = list(text)
     n = len(chars)
-    n_replace = max(1, int(n * replace_ratio))
+    n_replace = max(1, min(int(n * replace_ratio), n))
     try:
-        indices = random.sample(range(n), n_replace)
+        indices = random.sample(range(n), min(n_replace, n))
     except ValueError:
         return text, [], [], [], []
 
-    all_confuse = {**SHAPE_CONFUSE, **SOUND_CONFUSE}
     variant, origs, repls, conflicts = [], [], [], []
 
     for idx in sorted(indices):
         ch = chars[idx]
-        # 70% 形/音混淆, 30% 语义冲突
-        if random.random() < 0.7 and ch in all_confuse:
-            repl = all_confuse[ch]
-            conflict = False
-        elif random.random() < 0.3 and ch in SEMANTIC_CONFLICT:
-            repl = SEMANTIC_CONFLICT[ch]
-            conflict = True
+        if not ('\u4e00' <= ch <= '\u9fff'):
+            continue  # 只替换中文字符
+
+        roll = random.random()
+        repl = None
+        conflict = False
+
+        if roll < 0.50 and ch in SHAPE_CONFUSE:
+            repl = SHAPE_CONFUSE[ch]; conflict = False
+        elif roll < 0.80 and ch in SOUND_CONFUSE:
+            repl = SOUND_CONFUSE[ch]; conflict = False
+        elif roll < 0.95 and ch in SEMANTIC_CONFLICT:
+            repl = SEMANTIC_CONFLICT[ch]; conflict = True
+        elif roll < 0.98:
+            # 随机删除 (模拟策略②)
+            chars[idx] = ''
+            continue
         else:
-            # 不行就尝试另一个
-            if ch in all_confuse:
-                repl = all_confuse[ch]; conflict = False
-            elif ch in SEMANTIC_CONFLICT:
-                repl = SEMANTIC_CONFLICT[ch]; conflict = True
-            else:
+            # 尝试任意可用替换
+            for d in [SHAPE_CONFUSE, SOUND_CONFUSE, SEMANTIC_CONFLICT]:
+                if ch in d:
+                    repl = d[ch]; conflict = (d is SEMANTIC_CONFLICT)
+                    break
+            if repl is None:
                 continue
+
         origs.append(ch); repls.append(repl); conflicts.append(conflict)
         variant.append((idx, repl))
         chars[idx] = repl
@@ -102,10 +163,10 @@ def generate_adversarial_variant(text, p=0.4, replace_ratio=0.15):
 # Part 2: 三模态编码器
 # ===================================================================
 
-class GlyphCNN:
+class GlyphCNN(nn.Module):
     """字形流: 32×32灰度图 → 4层CNN → 512维"""
     def __init__(self, out_dim=512):
-        import torch, torch.nn as nn
+        super().__init__()
         self.cnn = nn.Sequential(
             nn.Conv2d(1, 32, 3, padding=1), nn.BatchNorm2d(32),
             nn.ReLU(), nn.MaxPool2d(2),          # 32→16
@@ -119,15 +180,14 @@ class GlyphCNN:
         self.proj = nn.Linear(256, out_dim)
 
     def forward(self, x):
-        import torch
         h = self.cnn(x).squeeze(-1).squeeze(-1)
         return self.proj(h)
 
 
-class PhoneticEncoder:
+class PhoneticEncoder(nn.Module):
     """字音流: pinyin字符序列 → 1D-CNN + BiLSTM → 512维"""
     def __init__(self, pinyin_vocab_size=64, out_dim=512):
-        import torch, torch.nn as nn
+        super().__init__()
         self.embed = nn.Embedding(pinyin_vocab_size, 64, padding_idx=0)
         self.conv1d = nn.Sequential(
             nn.Conv1d(64, 128, 3, padding=1), nn.ReLU(),
@@ -138,7 +198,6 @@ class PhoneticEncoder:
         self.proj = nn.Linear(256 + 256, out_dim)
 
     def forward(self, pinyin_seq_embed, pinyin_raw_embed):
-        import torch
         # 1D-CNN 分支
         cnn_out = pinyin_seq_embed.transpose(1, 2)  # (B,64,L)
         cnn_feat = self.conv1d(cnn_out).squeeze(-1)  # (B,256)
@@ -148,10 +207,10 @@ class PhoneticEncoder:
         return self.proj(torch.cat([cnn_feat, lstm_feat], dim=-1))
 
 
-class SemanticEmbedding:
+class SemanticEmbedding(nn.Module):
     """语义流: 字符嵌入 → MLP → 512维 (方案C:词向量蒸馏)"""
     def __init__(self, vocab_size=5000, out_dim=512):
-        import torch, torch.nn as nn
+        super().__init__()
         self.embed = nn.Embedding(vocab_size, 256, padding_idx=0)
         self.proj = nn.Sequential(
             nn.Linear(256, 384), nn.ReLU(),
@@ -166,15 +225,15 @@ class SemanticEmbedding:
 # Part 3: 三模态融合 + Transformer 主干
 # ===================================================================
 
-class TriModalFusion:
+class TriModalFusion(nn.Module):
     """融合层: [g; p; s] → 768维 + 3层Transformer"""
     def __init__(self, d_model=768, num_layers=3, num_heads=8, max_len=256):
-        import torch, torch.nn as nn
+        super().__init__()
         self.fusion = nn.Sequential(
             nn.Linear(512 * 3, d_model),
             nn.LayerNorm(d_model),
         )
-        self.pos_embed = nn.Parameter(torch.zeros(1, max_len, d_model))
+        self.pos_embed = nn.Parameter(torch.zeros(1, max_len + 1, d_model))
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=num_heads, dim_feedforward=d_model*4,
@@ -183,7 +242,6 @@ class TriModalFusion:
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
     def forward(self, glyph, phonetic, semantic):
-        import torch
         B, S, _ = glyph.shape
         fused = self.fusion(torch.cat([glyph, phonetic, semantic], dim=-1))  # (B,S,768)
         cls_tokens = self.cls_token.expand(B, -1, -1)
@@ -197,13 +255,13 @@ class TriModalFusion:
 # Part 4: GCANet — 三模态预训练 + 微调
 # ===================================================================
 
-class GCANet:
+class GCANet(BaseModel):
     """字形-字音-语义三模态联合对抗预训练网络"""
 
     def __init__(self, name='GCA-Net', glyph_weight=0.3, max_chars=5000):
-        self.name = name
+        super().__init__(name=name, input_type='tfidf')
         self.glyph_weight = glyph_weight
-        self.device = 'cpu'
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.tfidf_dim = None
         self.num_classes = None
 
@@ -228,6 +286,9 @@ class GCANet:
         # ── 分类器 (微调时创建) ──
         self.classifier = None
 
+        # ── 缓存 ──
+        self._glyph_render_cache = {}
+
         self.max_chars = max_chars
         self.max_seq = 256
 
@@ -247,6 +308,13 @@ class GCANet:
         draw = ImageDraw.Draw(img)
         draw.text((2, 2), ch, font=self.font, fill=0)
         return 1.0 - np.array(img, dtype=np.float32) / 255.0
+
+    def _get_rendered_char(self, ch):
+        cached = self._glyph_render_cache.get(ch)
+        if cached is None:
+            cached = self._render_char(ch)
+            self._glyph_render_cache[ch] = cached
+        return cached
 
     def _get_pinyin_seq(self, ch):
         """获取带声调的拼音字母序列"""
@@ -290,11 +358,13 @@ class GCANet:
 
         B = len(texts)
         S = self.max_seq
-        glyphs = torch.zeros(B, S, 512)
-        phones = torch.zeros(B, S, 512)
-        semans = torch.zeros(B, S, 512)
+        phones = torch.zeros(B, S, 512, device=self.device)
+        semans = torch.zeros(B, S, 512, device=self.device)
 
-        char_ids = torch.zeros(B, S, dtype=torch.long)
+        char_ids = torch.zeros(B, S, dtype=torch.long, device=self.device)
+        glyph_lookup = torch.zeros(B, S, dtype=torch.long, device=self.device)
+        unique_chars = []
+        glyph_index_map = {}
 
         for b, text in enumerate(texts):
             clean = re.sub(r'\s+', '', str(text))[:S]
@@ -302,13 +372,28 @@ class GCANet:
                 cid = self.char_vocab.get(ch, 1)
                 char_ids[b, i] = cid
 
-                # 字形: 渲染 → CNN
-                if self.font and self.glyph_cnn:
-                    try:
-                        img = torch.FloatTensor(self._render_char(ch)).unsqueeze(0)
-                        glyphs[b, i] = self.glyph_cnn(img.unsqueeze(0))
-                    except:
-                        pass
+                if self.font and self.glyph_cnn and ch not in glyph_index_map:
+                    glyph_index_map[ch] = len(unique_chars) + 1
+                    unique_chars.append(ch)
+
+                if ch in glyph_index_map:
+                    glyph_lookup[b, i] = glyph_index_map[ch]
+
+        glyphs = torch.zeros(B, S, 512, device=self.device)
+        if unique_chars and self.font and self.glyph_cnn:
+            try:
+                glyph_images = np.stack([self._get_rendered_char(ch) for ch in unique_chars], axis=0)
+                glyph_tensor = torch.as_tensor(
+                    glyph_images, dtype=torch.float32, device=self.device
+                ).unsqueeze(1)
+                glyph_features = self.glyph_cnn(glyph_tensor)
+                feature_table = torch.cat([
+                    torch.zeros(1, glyph_features.shape[-1], device=self.device),
+                    glyph_features,
+                ], dim=0)
+                glyphs = feature_table[glyph_lookup]
+            except Exception:
+                glyphs = torch.zeros(B, S, 512, device=self.device)
 
         # 语义嵌入
         if self.semantic_emb:
@@ -532,33 +617,56 @@ class GCANet:
 
     # ── 预测 ──
 
-    def predict(self, X):
+    def predict(self, X, batch_size=64):
         import torch
         self.classifier.eval()
-        if hasattr(X, 'toarray'): X = X.toarray()
-        X_t = torch.FloatTensor(X).to(self.device)
-        ctx = torch.zeros(X_t.shape[0], 768).to(self.device)
         tw = 1.0 - self.glyph_weight
+        all_preds = []
+        is_sparse = hasattr(X, 'toarray')
+        N = X.shape[0]
         with torch.no_grad():
-            return self.classifier(torch.cat([X_t*tw, ctx*self.glyph_weight], -1)).argmax(1).cpu().numpy()
+            for start in range(0, N, batch_size):
+                end = min(start + batch_size, N)
+                X_batch = X[start:end]
+                if is_sparse:
+                    X_batch = X_batch.toarray()
+                X_t = torch.FloatTensor(X_batch).to(self.device)
+                ctx = torch.zeros(X_t.shape[0], 768).to(self.device)
+                logits = self.classifier(torch.cat([X_t * tw, ctx * self.glyph_weight], -1))
+                all_preds.append(logits.argmax(1).cpu())
+        return torch.cat(all_preds, dim=0).numpy()
 
-    def predict_proba(self, X):
+    def predict_proba(self, X, batch_size=64):
         import torch
         self.classifier.eval()
-        if hasattr(X, 'toarray'): X = X.toarray()
-        X_t = torch.FloatTensor(X).to(self.device)
-        ctx = torch.zeros(X_t.shape[0], 768).to(self.device)
         tw = 1.0 - self.glyph_weight
+        all_probs = []
+        is_sparse = hasattr(X, 'toarray')
+        N = X.shape[0]
         with torch.no_grad():
-            return torch.softmax(self.classifier(torch.cat([X_t*tw, ctx*self.glyph_weight], -1)), 1).cpu().numpy()
+            for start in range(0, N, batch_size):
+                end = min(start + batch_size, N)
+                X_batch = X[start:end]
+                if is_sparse:
+                    X_batch = X_batch.toarray()
+                X_t = torch.FloatTensor(X_batch).to(self.device)
+                ctx = torch.zeros(X_t.shape[0], 768).to(self.device)
+                logits = self.classifier(torch.cat([X_t * tw, ctx * self.glyph_weight], -1))
+                all_probs.append(torch.softmax(logits, 1).cpu())
+        return torch.cat(all_probs, dim=0).numpy()
 
     def save(self, path):
         import torch
         torch.save({
             'glyph_cnn': self.glyph_cnn.state_dict() if self.glyph_cnn else None,
+            'phonetic_enc': self.phonetic_enc.state_dict() if self.phonetic_enc else None,
+            'semantic_emb': self.semantic_emb.state_dict() if self.semantic_emb else None,
+            'fusion_tr': self.fusion_tr.state_dict() if self.fusion_tr else None,
             'classifier': self.classifier.state_dict() if self.classifier else None,
             'tfidf_dim': self.tfidf_dim, 'num_classes': self.num_classes,
-            'char_vocab': self.char_vocab,
+            'char_vocab': self.char_vocab, 'char_list': self.char_list,
+            'pinyin_vocab': self.pinyin_vocab, 'pinyin_list': self.pinyin_list,
+            'glyph_weight': self.glyph_weight,
         }, path)
         print(f'  [{self.name}] 已保存: {path}')
 
@@ -567,14 +675,25 @@ class GCANet:
         ckpt = torch.load(path, map_location='cpu')
         self.tfidf_dim = ckpt['tfidf_dim']
         self.num_classes = ckpt['num_classes']
-        self.char_vocab = ckpt.get('char_vocab', {'[PAD]':0,'[UNK]':1})
+        self.char_vocab = ckpt.get('char_vocab', {'[PAD]':0,'[UNK]':1,'[CLS]':2,'[MASK]':3})
+        self.char_list = ckpt.get('char_list', list(self.char_vocab.keys()))
+        self.pinyin_vocab = ckpt.get('pinyin_vocab', {'[PAD]': 0})
+        self.pinyin_list = ckpt.get('pinyin_list', ['[PAD]'])
+        self.glyph_weight = ckpt.get('glyph_weight', self.glyph_weight)
 
         self.glyph_cnn = GlyphCNN(512)
-        self.phonetic_enc = PhoneticEncoder(64, 512)
+        self.phonetic_enc = PhoneticEncoder(len(self.pinyin_vocab), 512)
         self.semantic_emb = SemanticEmbedding(len(self.char_vocab), 512)
         self.fusion_tr = TriModalFusion(768, 3)
-        if ckpt['glyph_cnn'] is not None:
+
+        if ckpt.get('glyph_cnn') is not None:
             self.glyph_cnn.load_state_dict(ckpt['glyph_cnn'])
+        if ckpt.get('phonetic_enc') is not None:
+            self.phonetic_enc.load_state_dict(ckpt['phonetic_enc'])
+        if ckpt.get('semantic_emb') is not None:
+            self.semantic_emb.load_state_dict(ckpt['semantic_emb'])
+        if ckpt.get('fusion_tr') is not None:
+            self.fusion_tr.load_state_dict(ckpt['fusion_tr'])
 
         self.classifier = torch.nn.Sequential(
             torch.nn.Linear(self.tfidf_dim + 768, 256),
@@ -583,5 +702,20 @@ class GCANet:
         )
         self.classifier.load_state_dict(ckpt['classifier'])
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.classifier.to(self.device)
+        self.to_device()
         print(f'  [{self.name}] 已加载: {path}')
+        return self
+
+    def to_device(self):
+        """将所有模块移动到 self.device"""
+        import torch
+        if self.glyph_cnn:
+            self.glyph_cnn.to(self.device)
+        if self.phonetic_enc:
+            self.phonetic_enc.to(self.device)
+        if self.semantic_emb:
+            self.semantic_emb.to(self.device)
+        if self.fusion_tr:
+            self.fusion_tr.to(self.device)
+        if self.classifier:
+            self.classifier.to(self.device)

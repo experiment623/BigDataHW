@@ -6,6 +6,8 @@ scipy>=1.7.0
 matplotlib>=3.5.0
 seaborn>=0.12.0
 transformers>=4.20.0
-torch>=1.12.0
 gensim>=4.0.0
 pypinyin>=0.49.0
+
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch>=1.12.0

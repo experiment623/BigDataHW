@@ -117,7 +117,7 @@ def subset_data(texts, labels, X_tfidf, n_samples):
     indices = stratified_sample_indices(labels, n_samples, RANDOM_SEED)
     sub_texts = [texts[i] for i in indices]
     sub_labels = labels[indices]
-    sub_X = X_tfidf[indices] if X_tfidf is not None else None
+    sub_X = X_tfidf[indices] if hasattr(X_tfidf, '__getitem__') else X_tfidf
     return sub_texts, sub_labels, sub_X
 
 
