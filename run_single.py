@@ -123,12 +123,13 @@ REGISTRY, evaluate_model, cross_validate = _build_registry()
 # 训练 + 评估
 # ===================================================================
 
-def run_model(model_key, proc, do_cv=False, do_full=False, do_load=False):
+def run_model(model_key, proc, do_cv=False, do_full=False, is_binary=False, do_plot=False, do_load=False):
     info = REGISTRY[model_key]
     bar = '█' * 50
+    num_cls = 2 if is_binary else 10
 
     print(f'\n{"="*60}')
-    print(f'  {info["name"]}')
+    print(f'  {info["name"]}' + (' [二分类]' if is_binary else ' [10分类]'))
     print(f'{"="*60}')
 
     X_train, y_train = proc['X_train'], proc['y_train']
@@ -141,6 +142,12 @@ def run_model(model_key, proc, do_cv=False, do_full=False, do_load=False):
 
     if model_key == 'mlp':
         model.input_dim = X_train.shape[1]
+        model.num_classes = num_cls  # 覆盖类别数
+        model._build_model()
+    elif model_key == 'bert':
+        model.num_classes = num_cls   # 覆盖类别数
+    elif model_key == 'gca':
+        model.num_classes = num_cls
 
     # 子集采样
     if model_key == 'bert':
@@ -233,7 +240,11 @@ def run_model(model_key, proc, do_cv=False, do_full=False, do_load=False):
     if do_full:
         adv_df, y_adv, X_adv = load_adversarial_testset()
         if adv_df is not None:
-            print(f'\n  [对抗评估] 计算中...')
+            # 二分类模式: 对抗数据集标签也转二分类
+            if is_binary:
+                y_adv = (y_adv > 0).astype(int)
+                adv_df['label'] = (adv_df['label'] > 0).astype(int)
+            print(f'\n  [对抗评估] 计算中...{"(二分类)" if is_binary else ""}')
             adv_texts_list = adv_df['adv_text'].tolist() if info['type'] == 'text' else None
             adv_result = evaluate_on_adversarial_testset(model, adv_df, y_adv, X_adv, adv_texts_list)
 
@@ -258,6 +269,21 @@ def run_model(model_key, proc, do_cv=False, do_full=False, do_load=False):
     pd.DataFrame([row]).to_csv(csv_path, index=False, encoding='utf-8-sig')
     print(f'\n  📄 结果已保存: {csv_path}')
 
+    # ── 生成图像 (可选) ──
+    if do_plot or do_full:
+        print('\n  [可视化] 生成混淆矩阵...')
+        from visualize import plot_confusion_matrix
+        if model_key == 'bert':
+            y_pred_img = model.predict(sub_test_t)
+            plot_confusion_matrix(sub_test_y, y_pred_img, model.name)
+        elif info['type'] == 'text' and not info.get('is_gca'):
+            y_pred_img = model.predict(test_texts)
+            plot_confusion_matrix(y_test, y_pred_img, model.name)
+        else:
+            y_pred_img = model.predict(X_test)
+            plot_confusion_matrix(y_test, y_pred_img, model.name)
+        print(f'  📊 图像已保存至: {OUTPUT_DIR}')
+
     # ── 进度条概览 ──
     print(f'\n  {bar}')
     print(f'  ✓ {info["name"]} 完成!')
@@ -278,20 +304,32 @@ def main():
     parser.add_argument('--all', action='store_true', help='含对抗测试集评估')
     parser.add_argument('--cv', action='store_true', help='含交叉验证')
     parser.add_argument('--load', action='store_true', help='加载已保存的模型（跳过训练，仅对 GCA/BERT 等有 save/load 的模型有效）')
+    parser.add_argument('--plot', action='store_true', help='生成混淆矩阵图')
+    parser.add_argument('--binary', action='store_true', help='二分类模式 (label 0=正常, >0=垃圾)')
     args = parser.parse_args()
 
     # ── 前置检查 ──
     if not check_prerequisites(do_full=args.all):
         sys.exit(1)
 
-    # ── 加载数据 (首次运行显示进度) ──
-    print('\n[数据] 加载中...')
-    proc = get_prepared_data()
+    # ── 加载数据 (文本类模型跳过TF-IDF, 加速加载) ──
+    need_tfidf = REGISTRY[args.model]['type'] == 'tfidf'
+    print(f'\n[数据] 加载中... ({"含TF-IDF" if need_tfidf else "仅文本"})')
+    proc = get_prepared_data(need_tfidf=need_tfidf)
+
+    # ── 二分类模式: 标签映射 ──
+    if args.binary:
+        proc['y_train'] = (proc['y_train'] > 0).astype(int)
+        proc['y_val']   = (proc['y_val'] > 0).astype(int)
+        proc['y_test']  = (proc['y_test'] > 0).astype(int)
+        print(f'  [二分类] 标签已映射: 0=正常, 1=垃圾')
+        print(f'    训练集: 正常 {sum(proc["y_train"]==0)} 条, 垃圾 {sum(proc["y_train"]==1)} 条')
+
     print(f'  训练集: {len(proc["train_texts"])} 条, 测试集: {len(proc["test_texts"])} 条')
 
     # ── 运行 ──
     try:
-        run_model(args.model, proc, do_cv=args.cv, do_full=args.all, do_load=args.load)
+        run_model(args.model, proc, do_cv=args.cv, do_full=args.all, do_load=args.load, is_binary=args.binary, do_plot=args.plot)
     except Exception as e:
         print(f'\n✗ [{REGISTRY[args.model]["name"]}] 运行失败: {e}')
         traceback.print_exc()
