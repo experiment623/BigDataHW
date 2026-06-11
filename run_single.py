@@ -205,9 +205,9 @@ def run_model(model_key, proc, do_cv=False, do_full=False, is_binary=False, do_p
     save_path = os.path.join(MODEL_DIR, 'gca_net_model.pt' if info.get('is_gca') else save_name + '.pkl')
     model.save(save_path)
 
-    # ── 交叉验证 (可选) ──
+    # ── 交叉验证 (可选, 文本模型跳过) ──
     cv_summary = None
-    if do_cv and not info.get('is_gca') and model_key != 'bert':
+    if do_cv and not info.get('is_gca') and model_key != 'bert' and X_train is not None:
         X_cv = sub_X[:min(10000, X_train.shape[0])]
         y_cv = sub_y[:min(10000, len(y_train))]
         print(f'\n  [交叉验证] {N_FOLDS}-Fold')
@@ -242,6 +242,9 @@ def run_model(model_key, proc, do_cv=False, do_full=False, is_binary=False, do_p
     if cv_summary:
         row['cv_f1_mean'] = cv_summary.get('mean_f1_macro', 0)
         row['cv_f1_std'] = cv_summary.get('std_f1_macro', 0)
+    # 阈值指标 (r90/r95 只 coverage 重名, 单独处理)
+    row.update(thr.get('r90', {}))
+    row.update({k if k != 'coverage' else 'coverage_95': v for k, v in thr.get('r95', {}).items()})
     row['train_time_s'] = round(elapsed, 1)
     csv_path = os.path.join(OUTPUT_DIR, f'result_{save_name}.csv')
     pd.DataFrame([row]).to_csv(csv_path, index=False, encoding='utf-8-sig')

@@ -111,13 +111,13 @@ def get_prepared_data(need_tfidf=True):
 
 
 def subset_data(texts, labels, X_tfidf, n_samples):
-    """分层采样子集"""
+    """分层采样子集 (支持 X_tfidf=None)"""
     if n_samples is None or n_samples >= len(texts):
         return texts, labels, X_tfidf
     indices = stratified_sample_indices(labels, n_samples, RANDOM_SEED)
     sub_texts = [texts[i] for i in indices]
     sub_labels = labels[indices]
-    sub_X = X_tfidf[indices]
+    sub_X = X_tfidf[indices] if X_tfidf is not None else None
     return sub_texts, sub_labels, sub_X
 
 
