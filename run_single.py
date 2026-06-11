@@ -24,6 +24,7 @@
 可选:
   --all    含对抗测试集评估 (需预生成 adversarial_test.csv)
   --cv     含 K-Fold 交叉验证
+  --load   加载已保存模型 (跳过训练, 如 GCA: models/gca_net_model.pt)
 """
 import os, sys, time, argparse, traceback
 
@@ -122,7 +123,7 @@ REGISTRY, evaluate_model, cross_validate = _build_registry()
 # 训练 + 评估
 # ===================================================================
 
-def run_model(model_key, proc, do_cv=False, do_full=False):
+def run_model(model_key, proc, do_cv=False, do_full=False, do_load=False):
     info = REGISTRY[model_key]
     bar = '█' * 50
 
@@ -140,42 +141,49 @@ def run_model(model_key, proc, do_cv=False, do_full=False):
 
     if model_key == 'mlp':
         model.input_dim = X_train.shape[1]
-        model._build_model()
 
     # 子集采样
-    if info['subset']:
+    if model_key == 'bert':
+        print('  分层采样中...')
+        sub_texts, sub_y, _ = subset_data(train_texts, y_train, None, SUBSET_BERT_TRAIN)
+        sub_val_t, sub_val_y, _ = subset_data(val_texts, y_val, None, SUBSET_BERT_VAL)
+        sub_test_t, sub_test_y, _ = subset_data(test_texts, y_test, None, SUBSET_BERT_TEST)
+        sub_X = None
+        print(f'  BERT 子集: train={len(sub_texts)} val={len(sub_val_t)} test={len(sub_test_t)}')
+    elif info['subset']:
         print('  分层采样中...')
         sub_texts, sub_y, sub_X = subset_data(train_texts, y_train, X_train, SUBSET_TRAIN_SIZE)
         print(f'  子集: {len(sub_texts)} 条')
     else:
         sub_texts, sub_y, sub_X = train_texts, y_train, X_train
 
-    if model_key == 'bert':
-        sub_test_t, sub_test_y, _ = subset_data(test_texts, y_test, None, SUBSET_BERT_TEST)
-        sub_val_t, sub_val_y, _ = subset_data(val_texts, y_val, None, SUBSET_BERT_VAL)
-        print(f'  BERT 子集: test={len(sub_test_t)}')
-
     # ── 训练 (带进度条) ──
     print(f'\n  [训练] {info["name"]}')
     t0 = time.time()
 
     if info.get('is_gca'):
-        print('  Phase I: 三模态对抗预训练 (进度见下方 epoch 输出)...')
-        model.pretrain(texts=sub_texts, epochs=10, batch_size=32, lr=5e-4)
-        print('  Phase II: 微调分类器 (进度见下方 epoch 输出)...')
-        model.fit(X_tfidf=sub_X, y=sub_y, texts=sub_texts,
-                  epochs=min(GCA_EPOCHS, 10), batch_size=32, lr=1e-3,
-                  glyph_weight=GLYPH_WEIGHT, contrast_weight=CONTRAST_WEIGHT)
+        gca_save_path = os.path.join(MODEL_DIR, 'gca_net_model.pt')
+        if do_load and os.path.exists(gca_save_path):
+            print('  [加载] 跳过训练, 直接从磁盘加载模型...')
+            model.load(gca_save_path)
+            t0 = time.time()  # 加载几乎不耗时, 但保持结构一致
+        else:
+            if do_load and not os.path.exists(gca_save_path):
+                print(f'  [提示] 未找到已保存模型 {gca_save_path}, 将重新训练')
+            print('  Phase I: 三模态对抗预训练 (进度见下方 epoch 输出)...')
+            model.pretrain(texts=sub_texts, epochs=10, batch_size=32, lr=5e-4)
+            print('  Phase II: 微调分类器 (进度见下方 epoch 输出)...')
+            model.fit(X_tfidf=sub_X, y=sub_y, texts=sub_texts,
+                      epochs=min(GCA_EPOCHS, 10), batch_size=32, lr=1e-3,
+                      glyph_weight=GLYPH_WEIGHT, contrast_weight=CONTRAST_WEIGHT)
 
     elif info['type'] == 'text':
         # Word2Vec/Doc2Vec/BERT (内部有epoch打印, 外层显示进度)
         print('    训练中...')
-        if HAS_TQDM and model_key == 'bert':
-            # BERT 有3个epoch, 显示进度
-            import torch
-            from tqdm import tqdm as tqdm_std
-            # 我们无法hook进BERT内部, 用简单计时
-        model.fit(sub_texts, sub_y)
+        if model_key == 'bert':
+            model.fit(sub_texts, sub_y, epochs=3, lr=2e-5)
+        else:
+            model.fit(sub_texts, sub_y)
 
     else:
         # sklearn 模型: 一次性fit
@@ -183,7 +191,10 @@ def run_model(model_key, proc, do_cv=False, do_full=False):
         model.fit(sub_X, sub_y)
 
     elapsed = time.time() - t0
-    print(f'  ✓ 训练完成, 耗时: {elapsed:.1f}s ({elapsed/60:.1f}min)')
+    if info.get('is_gca') and do_load and os.path.exists(gca_save_path):
+        print(f'  ✓ 模型已加载, 耗时: {elapsed:.1f}s')
+    else:
+        print(f'  ✓ 训练完成, 耗时: {elapsed:.1f}s ({elapsed/60:.1f}min)')
 
     # ── 测试集评估 ──
     print(f'\n  [评估] 测试集')
@@ -194,10 +205,20 @@ def run_model(model_key, proc, do_cv=False, do_full=False):
     else:
         r_test = evaluate_model(model, X_test, y_test)
 
-    # ── 保存 ──
+    # ── 保存 (加载时跳过, 不覆盖已有模型) ──
     save_name = model.name.replace(' ', '_').replace('(', '').replace(')', '')
-    save_path = os.path.join(MODEL_DIR, 'gca_net_model.pt' if info.get('is_gca') else save_name + '.pkl')
-    model.save(save_path)
+    if info.get('is_gca'):
+        save_path = os.path.join(MODEL_DIR, 'gca_net_model.pt')
+        if do_load and os.path.exists(save_path):
+            pass  # 加载模式下不重复保存
+        else:
+            model.save(save_path)
+    elif model_key == 'bert':
+        save_path = os.path.join(MODEL_DIR, 'bert_model')
+        model.save(save_path)
+    else:
+        save_path = os.path.join(MODEL_DIR, save_name + '.pkl')
+        model.save(save_path)
 
     # ── 交叉验证 (可选) ──
     cv_summary = None
@@ -256,6 +277,7 @@ def main():
                         help='模型: ' + ', '.join(REGISTRY.keys()))
     parser.add_argument('--all', action='store_true', help='含对抗测试集评估')
     parser.add_argument('--cv', action='store_true', help='含交叉验证')
+    parser.add_argument('--load', action='store_true', help='加载已保存的模型（跳过训练，仅对 GCA/BERT 等有 save/load 的模型有效）')
     args = parser.parse_args()
 
     # ── 前置检查 ──
@@ -269,7 +291,7 @@ def main():
 
     # ── 运行 ──
     try:
-        run_model(args.model, proc, do_cv=args.cv, do_full=args.all)
+        run_model(args.model, proc, do_cv=args.cv, do_full=args.all, do_load=args.load)
     except Exception as e:
         print(f'\n✗ [{REGISTRY[args.model]["name"]}] 运行失败: {e}')
         traceback.print_exc()
