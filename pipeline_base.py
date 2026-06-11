@@ -84,23 +84,29 @@ def build_tfidf_data(train_texts, val_texts, test_texts):
     return result
 
 
-def get_prepared_data():
+def get_prepared_data(need_tfidf=True):
     """
     一键获取全部准备好的数据
 
-    返回:
-        proc: {
-            'X_train', 'X_val', 'X_test',
-            'y_train', 'y_val', 'y_test',
-            'vectorizer',
-            'train_texts', 'val_texts', 'test_texts',
-        }
+    参数:
+        need_tfidf: 是否需要 TF-IDF。文本类模型(Word2Vec/BERT)传 False 可跳过
     """
     (train_texts, train_labels), (val_texts, val_labels), (test_texts, test_labels) = load_all_data()
-    proc = build_tfidf_data(train_texts, val_texts, test_texts)
-    proc['y_train'] = np.array(train_labels)
-    proc['y_val'] = np.array(val_labels)
-    proc['y_test'] = np.array(test_labels)
+
+    if need_tfidf:
+        proc = build_tfidf_data(train_texts, val_texts, test_texts)
+        proc['y_train'] = np.array(train_labels)
+        proc['y_val'] = np.array(val_labels)
+        proc['y_test'] = np.array(test_labels)
+    else:
+        proc = {
+            'X_train': None, 'X_val': None, 'X_test': None,
+            'vectorizer': None,
+            'train_texts': train_texts, 'val_texts': val_texts, 'test_texts': test_texts,
+            'y_train': np.array(train_labels),
+            'y_val': np.array(val_labels),
+            'y_test': np.array(test_labels),
+        }
     return proc
 
 
