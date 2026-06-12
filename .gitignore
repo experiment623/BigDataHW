@@ -10,6 +10,7 @@ build/
 venv/
 .venv/
 env/
+.uv-cache/
 
 # IDE
 .vscode/
@@ -19,6 +20,7 @@ env/
 
 # 模型文件（太大，Git 不适合存）
 models/bert_model/
+models/sota_transformer/
 *.pkl
 *.pt
 *.npz
