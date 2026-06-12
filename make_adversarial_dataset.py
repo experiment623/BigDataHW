@@ -190,10 +190,10 @@ ATTACK_STRATEGIES = [
     (8, 'pinyin_abv', '拼音字母简写',   lambda t: pinyin_abbreviation(t)),  # 新增
 ]
 
-ATTACK_TARGET_MAP = {
-    0: [3, 4],              # 正常: 插入+掩码
-    1: [1, 2, 3, 4, 5, 6, 7, 8],  # 欺诈: 全部8种
-}
+# 正常文本: 仅做轻微扰动; 欺诈文本: 全部 8 种攻击
+# 这里用 dict comprehension 确保所有标签都有正确分配
+ATTACK_TARGET_MAP = {0: [3, 4]}  # 正常: 插入+掩码
+ATTACK_TARGET_MAP.update({l: [1, 2, 3, 4, 5, 6, 7, 8] for l in range(1, 10)})
 
 
 # ==================== 主逻辑 ====================
@@ -258,7 +258,7 @@ def make_adversarial_dataset(samples_per_class: int = 200, use_all: bool = False
     print(f'\n[3/5] 对每条原文应用攻击策略...')
     rows = []
     for label, texts in sorted(sampled.items()):
-        attack_ids = ATTACK_TARGET_MAP.get(label, [1, 2, 3, 4, 5, 6, 7])
+        attack_ids = ATTACK_TARGET_MAP.get(label, [1, 2, 3, 4, 5, 6, 7, 8])
         label_name = LABEL_MAP.get(label, f'类别{label}')
 
         for original_text in texts:

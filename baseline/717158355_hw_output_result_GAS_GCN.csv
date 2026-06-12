@@ -1,2 +1,0 @@
-﻿model,accuracy,precision_macro,recall_macro,f1_macro,f1_weighted,cv_f1_mean,cv_f1_std,precision@90%,recall@90%,f1@90%,coverage,precision@95%,recall@95%,f1@95%,coverage_95,train_time_s
-GAS (GCN),0.9272082831351597,0.9336885097126495,0.7913434774773793,0.8416943233804577,0.9201203797383775,0.9502,0.0154,0.9471,0.7953,0.8493,0.9749,0.9525,0.7959,0.8517,0.9636,7.3

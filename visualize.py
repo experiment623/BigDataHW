@@ -1,302 +1,363 @@
 """
-结果可视化模块
-提供混淆矩阵、模型对比、对抗鲁棒性等图表
+可视化脚本 — 混淆矩阵、模型对比、对抗鲁棒性、学习曲线
+===================================================
+用法:
+  python visualize.py                    # 生成全部图表
+  python visualize.py --type confusion   # 仅混淆矩阵
+  python visualize.py --type compare     # 仅模型对比
 """
-import os
+import os, sys, json, argparse
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # 非交互式后端，适合服务器环境
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import seaborn as sns
+from pathlib import Path
 from sklearn.metrics import confusion_matrix
-from config import OUTPUT_DIR, LABEL_MAP
 
+from config import OUTPUT_DIR, LABEL_MAP, NUM_CLASSES
 
-def _find_chinese_font():
-    """自动搜索系统中的中文字体"""
-    # 1. 先找系统已安装的字体
-    all_fonts = {f.name: f.fname for f in fm.fontManager.ttflist}
-    for name in ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei',
-                 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans SC',
-                 'Droid Sans Fallback', 'AR PL UMing CN', 'Source Han Sans CN']:
-        if name in all_fonts:
-            return all_fonts[name]
-
-    # 2. 搜常见路径
-    paths = [
-        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
-        '/usr/share/fonts/truetype/arphic/uming.ttc',
-        '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-        '/System/Library/Fonts/PingFang.ttc',
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            return p
-
-    return None
-
-
-_font_path = _find_chinese_font()
-if _font_path:
-    fm.fontManager.addfont(_font_path)
-    _font_name = fm.FontProperties(fname=_font_path).get_name()
-    plt.rcParams['font.sans-serif'] = [_font_name, 'DejaVu Sans']
-    print(f'[Visualize] 中文字体: {_font_name} ({_font_path})')
-else:
-    plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
-    print('[Visualize] ⚠ 未找到中文字体! 图表中文会显示为方块')
-    print('  安装: apt-get install fonts-wqy-microhei (Linux)')
-    print('  或手动下载字体放到 /usr/share/fonts/ 下')
-
+sns.set_style("whitegrid")
 plt.rcParams['axes.unicode_minus'] = False
-sns.set_style('whitegrid')
+
+# 中文字体
+for fname in ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC']:
+    try:
+        fm.findfont(fname, fallback_to_default=False)
+        plt.rcParams['font.sans-serif'] = [fname, 'DejaVu Sans']
+        break
+    except Exception:
+        continue
+
+FIG_DIR = os.path.join(OUTPUT_DIR, 'figures')
+os.makedirs(FIG_DIR, exist_ok=True)
+
+CLASS_NAMES = [LABEL_MAP.get(i, str(i)) for i in range(NUM_CLASSES)]
 
 
-def plot_confusion_matrix(y_true, y_pred, model_name: str, save_path: str = None):
-    """
-    绘制单个模型的混淆矩阵热力图
-    
-    参数:
-        y_true: 真实标签
-        y_pred: 预测标签
-        model_name: 模型名称
-        save_path: 图片保存路径（None 则自动生成）
-    """
-    labels = sorted(set(list(y_true) + list(y_pred)))
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
-    
-    # 归一化（按行）
-    cm_norm = cm.astype('float') / cm.sum(axis=1, keepdims=True)
-    cm_norm = np.nan_to_num(cm_norm)
-    
-    label_names = [LABEL_MAP.get(l, str(l)) for l in labels]
-    
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # 原始计数
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=label_names, yticklabels=label_names,
-                ax=axes[0], cbar_kws={'label': '样本数'})
-    axes[0].set_title(f'{model_name} - 混淆矩阵(计数)', fontsize=14)
-    axes[0].set_xlabel('预测标签')
-    axes[0].set_ylabel('真实标签')
-    
-    # 归一化
-    sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='YlOrRd',
-                xticklabels=label_names, yticklabels=label_names,
-                ax=axes[1], cbar_kws={'label': '召回率'})
-    axes[1].set_title(f'{model_name} - 混淆矩阵(归一化)', fontsize=14)
-    axes[1].set_xlabel('预测标签')
-    axes[1].set_ylabel('真实标签')
-    
+def plot_confusion_matrix(y_true, y_pred, title='Confusion Matrix', save_name='confusion_matrix.png'):
+    """混淆矩阵热力图"""
+    cm = confusion_matrix(y_true, y_pred, labels=range(NUM_CLASSES))
+    cm_norm = cm.astype('float') / cm.sum(axis=1, keepdims=True).clip(min=1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0],
+                xticklabels=CLASS_NAMES, yticklabels=CLASS_NAMES)
+    axes[0].set_title(f'{title} (Count)', fontsize=14)
+    axes[0].set_xlabel('Predicted'); axes[0].set_ylabel('True')
+
+    sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='YlOrRd', ax=axes[1],
+                xticklabels=CLASS_NAMES, yticklabels=CLASS_NAMES, vmax=1.0)
+    axes[1].set_title(f'{title} (Normalized)', fontsize=14)
+    axes[1].set_xlabel('Predicted'); axes[1].set_ylabel('True')
+
     plt.tight_layout()
-    if save_path is None:
-        save_path = os.path.join(OUTPUT_DIR, f'cm_{model_name.replace(" ", "_")}.png')
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f'  混淆矩阵已保存: {save_path}')
-    return save_path
+    path = os.path.join(FIG_DIR, save_name)
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  混淆矩阵: {path}')
 
 
-def plot_model_comparison(results_df: pd.DataFrame, metric: str = 'f1_macro',
-                          save_path: str = None):
-    """
-    多模型性能对比柱状图
-    
-    参数:
-        results_df: 包含 'model' 列和各指标列的 DataFrame
-        metric: 对比的主指标 (f1_macro / accuracy 等)
-        save_path: 保存路径
-    """
-    metrics_to_plot = ['accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'f1_weighted']
-    available = [m for m in metrics_to_plot if m in results_df.columns]
-    
-    if not available:
-        print('[警告] 无可绘制指标')
+def plot_per_class_f1(metrics_row, save_name='per_class_f1.png'):
+    """各类别 F1 柱状图"""
+    if isinstance(metrics_row, str):
+        per_f1 = json.loads(metrics_row)
+    elif isinstance(metrics_row, dict):
+        per_f1 = metrics_row
+    else:
         return
-    
-    df_sorted = results_df.sort_values(metric, ascending=True)
-    
+
+    labels = [CLASS_NAMES[int(k)] for k in per_f1.keys()]
+    values = list(per_f1.values())
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    colors = ['#2ecc71' if v > 0.8 else '#f39c12' if v > 0.5 else '#e74c3c' for v in values]
+    bars = ax.bar(range(len(labels)), values, color=colors, edgecolor='white')
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=45, ha='right')
+    ax.set_ylabel('F1 Score'); ax.set_ylim(0, 1.05)
+    ax.set_title('Per-Class F1 Score', fontsize=14)
+
+    for bar, v in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                f'{v:.3f}', ha='center', fontsize=9)
+
+    plt.tight_layout()
+    path = os.path.join(FIG_DIR, save_name)
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  各类别F1: {path}')
+
+
+def plot_model_comparison():
+    """模型横向对比柱状图 — 读取所有 metrics.csv"""
+    all_metrics = []
+
+    # 收集所有 test_metrics.csv
+    for root, dirs, files in os.walk(OUTPUT_DIR):
+        for f in files:
+            if f in ('test_metrics.csv', 'metrics.csv'):
+                path = os.path.join(root, f)
+                try:
+                    df = pd.read_csv(path, encoding='utf-8-sig')
+                    if len(df) > 0:
+                        row = df.iloc[0].to_dict()
+                        if 'experiment' not in row:
+                            row['experiment'] = os.path.basename(root)
+                        all_metrics.append(row)
+                except Exception:
+                    pass
+
+    # 也读取 sota_results.csv
+    sota_path = os.path.join(OUTPUT_DIR, 'sota_results.csv')
+    if os.path.exists(sota_path):
+        df_sota = pd.read_csv(sota_path, encoding='utf-8-sig')
+        if 'experiment' in df_sota.columns and 'split' in df_sota.columns:
+            df_test = df_sota[df_sota['split'] == 'test']
+            for _, row in df_test.iterrows():
+                all_metrics.append(row.to_dict())
+
+    if not all_metrics:
+        print('[可视化] 未找到任何指标文件，请先运行模型')
+        return
+
+    df_all = pd.DataFrame(all_metrics)
+    df_all = df_all.drop_duplicates(subset=['experiment'], keep='last')
+
+    metrics_to_plot = ['accuracy', 'f1_macro', 'f1@90', 'f1@95']
+    available = [m for m in metrics_to_plot if m in df_all.columns]
+    if not available:
+        print('[可视化] 无可用指标列')
+        return
+
+    n_models = len(df_all)
     n_metrics = len(available)
-    fig, axes = plt.subplots(1, n_metrics, figsize=(5 * n_metrics, 6))
-    if n_metrics == 1:
-        axes = [axes]
-    
-    colors = sns.color_palette('viridis', len(df_sorted))
-    
-    for ax, met in zip(axes, available):
-        bars = ax.barh(df_sorted['model'], df_sorted[met], color=colors)
-        for bar, val in zip(bars, df_sorted[met]):
-            ax.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
-                    f'{val:.3f}', va='center', fontsize=9)
-        ax.set_title(met.replace('_', ' ').title(), fontsize=12)
-        ax.set_xlim(0, 1.0)
-        ax.set_xlabel('Score')
-    
+    x = np.arange(n_models)
+    width = 0.8 / n_metrics
+    colors = ['#3498db', '#2ecc71', '#e74c3c', '#f39c12']
+
+    fig, ax = plt.subplots(figsize=(max(12, n_models * 1.2), 6))
+
+    for i, metric in enumerate(available):
+        values = [df_all.iloc[j].get(metric, 0) for j in range(n_models)]
+        bars = ax.bar(x + i * width, values, width, label=metric.replace('_', ' ').title(),
+                      color=colors[i % len(colors)], edgecolor='white')
+
+    ax.set_xticks(x + width * (n_metrics - 1) / 2)
+    ax.set_xticklabels(df_all['experiment'].values, rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel('Score'); ax.set_ylim(0, 1.05)
+    ax.set_title('Model Comparison', fontsize=14)
+    ax.legend(loc='lower right')
     plt.tight_layout()
-    if save_path is None:
-        save_path = os.path.join(OUTPUT_DIR, 'model_comparison.png')
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f'  模型对比图已保存: {save_path}')
-    return save_path
+
+    path = os.path.join(FIG_DIR, 'model_comparison.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  模型对比: {path}')
 
 
-def plot_adversarial_robustness(adv_results: dict, save_path: str = None):
-    """
-    对抗鲁棒性对比图
-    
-    参数:
-        adv_results: {model_name: {'accuracy': float, 'detail': DataFrame}}
-        save_path: 保存路径
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # 左图：各模型对抗总体准确率
-    model_names = list(adv_results.keys())
-    accuracies = [adv_results[n]['accuracy'] for n in model_names]
-    
-    colors = ['#2ecc71' if a >= 0.7 else '#f39c12' if a >= 0.5 else '#e74c3c'
-              for a in accuracies]
-    bars = axes[0].barh(model_names, accuracies, color=colors)
-    for bar, val in zip(bars, accuracies):
-        axes[0].text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
-                      f'{val:.3f}', va='center', fontsize=10)
-    axes[0].set_title('各模型对抗样本总体准确率', fontsize=14)
-    axes[0].set_xlim(0, 1.0)
-    axes[0].axvline(x=0.5, color='gray', linestyle='--', alpha=0.5)
-    
-    # 右图：首选第一个有效模型的攻击类型分解
-    ax2 = axes[1]
-    for name in model_names:
-        detail = adv_results[name]['detail']
-        if 'attack_method' in detail.columns and 'accuracy' in detail.columns:
-            detail_sorted = detail.sort_values('accuracy')
-            bars = ax2.barh(detail_sorted['attack_method'], detail_sorted['accuracy'],
-                           alpha=0.7, label=name)
-            for bar, val in zip(bars, detail_sorted['accuracy']):
-                ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
-                        f'{val:.2f}', va='center', fontsize=8)
-            break  # 只画第一个模型的细节
-    
-    ax2.set_title('攻击类型鲁棒性分解', fontsize=14)
-    ax2.set_xlim(0, 1.0)
-    ax2.legend(loc='lower right')
-    ax2.axvline(x=0.5, color='gray', linestyle='--', alpha=0.5)
-    
+def plot_confidence_distribution():
+    """置信度分布直方图 — 读取所有 test_results.csv"""
+    all_conf = {}
+    for root, dirs, files in os.walk(OUTPUT_DIR):
+        for f in files:
+            if f == 'test_results.csv':
+                path = os.path.join(root, f)
+                try:
+                    df = pd.read_csv(path, encoding='utf-8-sig')
+                    if 'confidence' in df.columns:
+                        name = os.path.basename(root) or os.path.basename(os.path.dirname(root))
+                        all_conf[name] = df['confidence'].values
+                except Exception:
+                    pass
+
+    if not all_conf:
+        print('[可视化] 未找到 test_results.csv')
+        return
+
+    n = len(all_conf)
+    cols = min(3, n)
+    rows = (n + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
+    if rows * cols == 1:
+        axes = np.array([[axes]])
+    axes = np.atleast_2d(axes)
+
+    for idx, (name, confs) in enumerate(all_conf.items()):
+        r, c = idx // cols, idx % cols
+        ax = axes[r, c] if r < axes.shape[0] and c < axes.shape[1] else None
+        if ax is None:
+            continue
+        ax.hist(confs, bins=50, color='#3498db', edgecolor='white', alpha=0.7)
+        ax.axvline(np.mean(confs), color='red', linestyle='--', label=f'mean={np.mean(confs):.3f}')
+        ax.set_title(name, fontsize=10)
+        ax.set_xlabel('Confidence'); ax.set_ylabel('Count')
+        ax.legend(fontsize=8)
+
+    for idx in range(len(all_conf), rows * cols):
+        r, c = idx // cols, idx % cols
+        if r < axes.shape[0] and c < axes.shape[1]:
+            axes[r, c].set_visible(False)
+
+    plt.suptitle('Prediction Confidence Distribution', fontsize=14)
     plt.tight_layout()
-    if save_path is None:
-        save_path = os.path.join(OUTPUT_DIR, 'adversarial_robustness.png')
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f'  对抗鲁棒性图已保存: {save_path}')
-    return save_path
+    path = os.path.join(FIG_DIR, 'confidence_distribution.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  置信度分布: {path}')
 
 
-def plot_label_distribution(train_labels, val_labels, test_labels,
-                            save_path: str = None):
-    """
-    绘制标签分布对比图
-    
-    参数:
-        train_labels, val_labels, test_labels: 各数据集的标签列表
-        save_path: 保存路径
-    """
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    
-    datasets = [
-        ('训练集', train_labels),
-        ('验证集(2022)', val_labels),
-        ('测试集(2023)', test_labels)
-    ]
-    
-    for ax, (name, labels) in zip(axes, datasets):
-        label_names = [LABEL_MAP.get(l, str(l)) for l in sorted(set(labels))]
-        counts = pd.Series(labels).value_counts().sort_index()
-        
-        colors = sns.color_palette('Set3', len(counts))
-        bars = ax.bar(range(len(counts)), counts.values, color=colors, edgecolor='white')
-        ax.set_xticks(range(len(counts)))
-        ax.set_xticklabels(label_names, rotation=45, ha='right', fontsize=8)
-        ax.set_title(f'{name}\n(总样本: {len(labels)})', fontsize=12)
-        ax.set_ylabel('样本数')
-        
-        for bar, val in zip(bars, counts.values):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 5,
-                    str(val), ha='center', fontsize=8)
-    
+def plot_learning_curve():
+    """学习曲线 — 读取 transformer metrics"""
+    tf_path = os.path.join(OUTPUT_DIR, 'transformer_results.csv')
+    for root, dirs, files in os.walk(OUTPUT_DIR):
+        for f in files:
+            if f == 'metrics.csv' and 'macbert' in root.lower():
+                tf_path = os.path.join(root, f)
+                break
+
+    if not os.path.exists(tf_path):
+        print(f'[可视化] 未找到 Transformer 指标文件')
+        return
+
+    df = pd.read_csv(tf_path, encoding='utf-8-sig')
+    if 'epoch' not in df.columns or 'f1_macro' not in df.columns:
+        return
+
+    df_test = df[df.get('split', 'test') == 'test'].sort_values('epoch')
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(df_test['epoch'], df_test['f1_macro'], 'o-', color='#2ecc71', linewidth=2, markersize=8, label='F1 Macro')
+    if 'f1@90' in df_test.columns:
+        ax.plot(df_test['epoch'], df_test['f1@90'], 's--', color='#3498db', linewidth=1.5, label='F1@90')
+    if 'f1@95' in df_test.columns:
+        ax.plot(df_test['epoch'], df_test['f1@95'], '^--', color='#e74c3c', linewidth=1.5, label='F1@95')
+
+    ax.set_xlabel('Epoch'); ax.set_ylabel('F1 Score'); ax.set_ylim(0, 1.05)
+    ax.set_title('Transformer Fine-tuning Learning Curve', fontsize=14)
+    ax.legend(); ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    if save_path is None:
-        save_path = os.path.join(OUTPUT_DIR, 'label_distribution.png')
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    fig.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f'  标签分布图已保存: {save_path}')
-    return save_path
+
+    path = os.path.join(FIG_DIR, 'learning_curve.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  学习曲线: {path}')
 
 
-def generate_all_visualizations(raw_data, proc_data, ml_models, ml_results,
-                                 mlp_val, mlp_test, adv_results,
-                                 bert_results=None):
-    """
-    一键生成所有可视化图表
-    
-    参数:
-        raw_data: (train_texts, train_labels), (val_texts, val_labels), (test_texts, test_labels)
-        proc_data: 预处理后的数据字典
-        ml_models: 训练好的模型字典
-        ml_results: 传统 ML 结果
-        mlp_val, mlp_test: MLP 的验证/测试结果
-        adv_results: 对抗评估结果
-        bert_results: (可选) BERT 的 (bert_val, bert_test, bert_data)
-    """
-    print('\n' + '='*60)
-    print('  [可视化] 生成结果图表')
-    print('='*60)
-    
-    (_, train_labels), (_, val_labels), (_, test_labels) = raw_data
-    
-    # 1. 标签分布
-    plot_label_distribution(train_labels, val_labels, test_labels)
-    
-    # 2. 模型对比
-    all_results = ml_results['test'].copy()
-    all_results.append(mlp_test)
-    if bert_results is not None:
-        bert_val, bert_test, _ = bert_results
-        all_results.append(bert_test)
-    results_df = pd.DataFrame(all_results)
-    plot_model_comparison(results_df)
-    
-    # 3. 混淆矩阵（对每个模型在测试集上生成）
-    X_test = proc_data['X_test']
-    y_test = proc_data['y_test']
-    test_texts = proc_data.get('test_texts', [])
-    for name, model in ml_models.items():
-        if model.input_type == 'text':
-            # 文本输入模型
-            _, _, bert_data = bert_results if bert_results else (None, None, None)
-            if bert_data and 'BERT' in name:
-                _, _, sub_test_texts, sub_test_labels = bert_data
-                y_pred = model.predict(sub_test_texts)
-                plot_confusion_matrix(sub_test_labels, y_pred, name)
-            else:
-                # Word2Vec/Doc2Vec 等文本模型用全量测试文本
-                y_pred = model.predict(test_texts)
-                plot_confusion_matrix(y_test, y_pred, name)
-        else:
-            y_pred = model.predict(X_test)
-            plot_confusion_matrix(y_test, y_pred, name)
-    
-    # 4. 对抗鲁棒性
-    if adv_results:
-        plot_adversarial_robustness(adv_results)
-    
-    print('  所有图表已保存至:', OUTPUT_DIR)
+def plot_adversarial_robustness():
+    """对抗鲁棒性对比 — 读取各模型的 adversarial_metrics.csv"""
+    all_adv = []
+    for root, dirs, files in os.walk(OUTPUT_DIR):
+        for f in files:
+            if f in ('adversarial_metrics.csv',):
+                path = os.path.join(root, f)
+                try:
+                    df = pd.read_csv(path, encoding='utf-8-sig')
+                    if len(df) > 0:
+                        row = df.iloc[0].to_dict()
+                        row['model'] = os.path.basename(root)
+                        all_adv.append(row)
+                except Exception:
+                    pass
+
+    if not all_adv:
+        print('[可视化] 未找到 adversarial_metrics.csv，请用 --adv 运行模型')
+        return
+
+    df_adv = pd.DataFrame(all_adv)
+    df_adv = df_adv.drop_duplicates(subset=['model'], keep='last')
+
+    if 'f1_macro' not in df_adv.columns:
+        return
+
+    fig, ax = plt.subplots(figsize=(max(8, len(df_adv)*1.0), 5))
+    x = np.arange(len(df_adv))
+    width = 0.35
+
+    bars1 = ax.bar(x - width/2, [df_adv.iloc[i].get('f1_macro', 0) for i in range(len(df_adv))],
+                   width, label='F1 (Adversarial)', color='#e74c3c', edgecolor='white')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(df_adv['model'].values, rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel('F1 Score'); ax.set_ylim(0, 1.05)
+    ax.set_title('Adversarial Robustness Comparison', fontsize=14)
+    ax.legend()
+
+    for bar, v in zip(bars1, [df_adv.iloc[i].get('f1_macro', 0) for i in range(len(df_adv))]):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                f'{v:.3f}', ha='center', fontsize=8)
+
+    plt.tight_layout()
+    path = os.path.join(FIG_DIR, 'adversarial_robustness.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'  对抗鲁棒性: {path}')
+
+
+def plot_all():
+    print('\n' + '=' * 50)
+    print('  生成可视化图表')
+    print('=' * 50)
+    plot_model_comparison()
+    plot_confidence_distribution()
+    plot_learning_curve()
+    plot_adversarial_robustness()
+
+    # 如果有 sota_results.csv，生成各类别 F1 图
+    sota_path = os.path.join(OUTPUT_DIR, 'sota_results.csv')
+    if os.path.exists(sota_path):
+        df = pd.read_csv(sota_path, encoding='utf-8-sig')
+        for _, row in df.iterrows():
+            if 'per_class_f1_json' in row and pd.notna(row['per_class_f1_json']):
+                name = row.get('experiment', 'model')
+                plot_per_class_f1(row['per_class_f1_json'], f'per_class_f1_{name}.png')
+                break
+
+    # 如果某个模型目录下有 test_results.csv，生成混淆矩阵
+    for root, dirs, files in os.walk(OUTPUT_DIR):
+        for f in files:
+            if f == 'test_results.csv':
+                path = os.path.join(root, f)
+                df = pd.read_csv(path, encoding='utf-8-sig')
+                if 'true_label' in df.columns and 'pred_label' in df.columns:
+                    name = os.path.basename(root)
+                    plot_confusion_matrix(df['true_label'].values, df['pred_label'].values,
+                                          title=name, save_name=f'confusion_{name}.png')
+                break
+
+    print(f'\n全部图表已保存至: {FIG_DIR}/')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--type', default='all',
+                        choices=['all', 'confusion', 'compare', 'confidence', 'learning', 'adversarial', 'f1'])
+    args = parser.parse_args()
+
+    if args.type == 'all':
+        plot_all()
+    elif args.type == 'compare':
+        plot_model_comparison()
+    elif args.type == 'confidence':
+        plot_confidence_distribution()
+    elif args.type == 'learning':
+        plot_learning_curve()
+    elif args.type == 'adversarial':
+        plot_adversarial_robustness()
+    elif args.type == 'f1':
+        sota_path = os.path.join(OUTPUT_DIR, 'sota_results.csv')
+        if os.path.exists(sota_path):
+            df = pd.read_csv(sota_path, encoding='utf-8-sig')
+            for _, row in df.iterrows():
+                if 'per_class_f1_json' in row and pd.notna(row['per_class_f1_json']):
+                    plot_per_class_f1(row['per_class_f1_json'])
+                    break
+    else:
+        # 对单个 test_results.csv 画混淆矩阵
+        print('用法: python visualize.py --type all')

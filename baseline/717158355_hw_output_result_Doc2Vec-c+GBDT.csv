@@ -1,2 +1,0 @@
-﻿model,accuracy,precision_macro,recall_macro,f1_macro,f1_weighted,precision@90%,recall@90%,f1@90%,coverage,precision@95%,recall@95%,f1@95%,coverage_95,train_time_s
-Doc2Vec-c+GBDT,0.2839,0.8677636446001644,0.6571391780327146,0.246,0.8575858338737575,0.9409,0.5642,0.5993,0.7694,0.9423,0.5384,0.561,0.6439,42.7

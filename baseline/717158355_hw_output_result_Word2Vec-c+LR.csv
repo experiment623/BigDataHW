@@ -1,2 +1,0 @@
-﻿model,accuracy,precision_macro,recall_macro,f1_macro,f1_weighted,precision@90%,recall@90%,f1@90%,coverage,precision@95%,recall@95%,f1@95%,coverage_95,train_time_s
-Word2Vec-c+LR,0.725,0.8466516112688586,0.8363630725887707,0.5048,0.9140819853712218,0.9232,0.8886,0.9049,0.7886,0.9363,0.9023,0.9184,0.6911,16.7
