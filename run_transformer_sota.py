@@ -1,8 +1,22 @@
 """
 GPU Transformer fine-tuning for ChiFraud — MacBERT / RoBERTa
 =============================================================
+不同训练方式自动保存为不同模型（run_id 含关键参数）:
+  - 每个 epoch 保存: saved_models/{run_id}_epoch{N}/
+  - 最佳 F1 模型保存: saved_models/{run_id}/
+
 用法:
-  python run_transformer_sota.py --train-with-val --epochs 2 --save-predictions --adv
+  # 训练不同配置（自动保存到不同目录）
+  python run_transformer_sota.py --train-with-val --epochs 3 --save-predictions --adv
+  python run_transformer_sota.py --epochs 3 --class-weight balanced --loss-type focal
+  python run_transformer_sota.py --train-with-val --epochs 3 --sampler-weight-power 0.5
+
+  # 加载已保存模型评估（指定 run_id）
+  python run_transformer_sota.py --load --run-name macbert_base_+val --save-predictions --adv
+  python run_transformer_sota.py --load --run-name macbert_base_train_cwbalanced_focal1.5 --save-predictions --adv
+
+  # 只保存最佳模型（不加每 epoch 保存）
+  python run_transformer_sota.py --train-with-val --epochs 3 --no-save-every-epoch
 """
 from __future__ import annotations
 
@@ -22,6 +36,7 @@ from data_processor import load_adversarial_data
 
 DATASET_DIR = Path("dataset")
 OUTPUT_DIR = Path("output")
+SAVED_MODELS_DIR = Path("saved_models")
 MODEL_OUT_DIR = Path("models") / "sota_transformer"
 RANDOM_SEED = 42
 LABELS = list(range(10))
@@ -261,7 +276,42 @@ def parse_args():
     p.add_argument("--save-predictions", action="store_true")
     p.add_argument("--adv", action="store_true", help="含对抗评估")
     p.add_argument("--eval-test", action="store_true")
+    p.add_argument("--load", action="store_true", help="加载已保存模型直接评估（跳过训练）")
+    p.add_argument("--save-every-epoch", action="store_true", default=True,
+                   help="每个 epoch 都保存模型（默认开启）；--no-save-every-epoch 只保存最佳")
+    p.add_argument("--no-save-every-epoch", dest="save_every_epoch", action="store_false")
     return p.parse_args()
+
+
+def get_transformer_model_dir(run_id: str) -> Path:
+    """获取 Transformer 模型保存目录"""
+    model_dir = SAVED_MODELS_DIR / run_id
+    model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir
+
+
+def save_transformer_model(model, tokenizer, run_id: str):
+    """保存 Transformer 模型权重和 tokenizer"""
+    model_dir = get_transformer_model_dir(run_id)
+    model.save_pretrained(str(model_dir))
+    tokenizer.save_pretrained(str(model_dir))
+    print(f"  模型已保存: {model_dir}")
+
+
+def load_transformer_model(run_id: str, device):
+    """加载已保存的 Transformer 模型和 tokenizer"""
+    model_dir = get_transformer_model_dir(run_id)
+    if not (model_dir / "config.json").exists():
+        raise FileNotFoundError(f"未找到已保存模型: {model_dir}")
+    tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
+    model = AutoModelForSequenceClassification.from_pretrained(
+        str(model_dir),
+        num_labels=len(LABELS),
+        id2label={i: str(i) for i in LABELS},
+        label2id={str(i): i for i in LABELS},
+    ).to(device)
+    print(f"  模型已加载: {model_dir}")
+    return model, tokenizer
 
 
 def main():
@@ -286,7 +336,85 @@ def main():
         fit_texts, fit_y, args.augment_minority, args.augment_labels, args.seed
     )
 
+    # 构建唯一的 run_id：包含模型名 + 关键训练参数
+    def build_run_id(args) -> str:
+        base = args.run_name.replace("/", "_")
+        parts = [base]
+        # 训练数据范围
+        parts.append("+val" if args.train_with_val else "train")
+        # 类别权重
+        if args.class_weight != "sqrt":
+            parts.append(f"cw{args.class_weight}")
+        # 损失函数
+        if args.loss_type != "ce":
+            parts.append(f"{args.loss_type}{args.focal_gamma}")
+        # 采样器
+        if args.sampler_weight_power > 0:
+            parts.append(f"sp{args.sampler_weight_power}")
+        # 数据增强
+        if args.augment_minority > 0:
+            parts.append(f"aug{args.augment_minority}")
+        # label smoothing
+        if args.label_smoothing > 0:
+            parts.append(f"ls{args.label_smoothing}")
+        return "_".join(parts)
+
+    run_id = build_run_id(args)
+    out_dir = os.path.join(OUTPUT_DIR, run_id)
+    os.makedirs(out_dir, exist_ok=True)
+
     print(f"Fit={len(fit_texts)} Val={len(val_texts)} Test={len(test_texts)}")
+    print(f"Run ID: {run_id}")
+
+    # ── 加载已保存模型 ──
+    if args.load:
+        try:
+            model, tokenizer = load_transformer_model(run_id, device)
+        except FileNotFoundError as e:
+            print(f"  [跳过] {e}")
+            return
+
+        train_start = time.time()
+        elapsed = time.time() - train_start
+
+        # 从 run_id 中提取 epoch（如果是 epoch 子模型）
+        epoch_label = 0
+        if "_epoch" in run_id:
+            try:
+                epoch_label = int(run_id.rsplit("_epoch", 1)[-1])
+            except ValueError:
+                epoch_label = 0
+
+        # 测试集评估
+        y_test_pred, test_proba = evaluate(model, tokenizer, test_texts, y_test, args, device)
+        m_test = compute_metrics_full(run_id, y_test, y_test_pred, test_proba, epoch=epoch_label, train_time=elapsed)
+        print(f"test: acc={m_test['accuracy']:.4f} f1={m_test['f1_macro']:.4f} "
+              f"f1@90={m_test['f1@90']:.4f} f1@95={m_test['f1@95']:.4f}")
+
+        all_metrics = [{**m_test, 'split': 'test'}]
+
+        if args.save_predictions:
+            save_results(test_texts, y_test, y_test_pred, test_proba, out_dir, f"test_epoch{epoch_label}")
+            save_score_csv(run_id, y_test, y_test_pred, test_proba, epoch=epoch_label, split="test")
+
+        # 对抗评估
+        if args.adv:
+            adv_df, adv_texts_adv, y_adv = load_adversarial_data()
+            if adv_df is not None and len(adv_texts_adv) > 0:
+                y_adv_pred, adv_proba = evaluate(model, tokenizer, adv_texts_adv, y_adv, args, device)
+                m_adv = compute_metrics_full(run_id, y_adv, y_adv_pred, adv_proba, epoch=epoch_label, train_time=elapsed)
+                all_metrics.append({**m_adv, 'split': 'adversarial'})
+                print(f"adversarial: acc={m_adv['accuracy']:.4f} f1={m_adv['f1_macro']:.4f}")
+                if args.save_predictions:
+                    save_results(adv_texts_adv, y_adv, y_adv_pred, adv_proba, out_dir, f"adversarial_epoch{epoch_label}")
+
+        # 保存指标
+        df_all = pd.DataFrame(all_metrics)
+        df_all.to_csv(os.path.join(out_dir, "metrics.csv"), index=False, encoding='utf-8-sig')
+        print(f"\nSaved: {out_dir}/metrics.csv")
+        return
+
+    # ── 训练新模型 ──
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_name, num_labels=len(LABELS),
@@ -311,10 +439,10 @@ def main():
     loss_weight = class_weights(fit_y, args.class_weight, device, args.effective_beta)
     scaler = torch.amp.GradScaler("cuda", enabled=args.fp16 and device.type == "cuda")
 
-    run_id = args.run_name.replace("/", "_")
-    out_dir = os.path.join(OUTPUT_DIR, run_id)
     train_start = time.time()
     all_metrics = []
+    best_f1 = -1.0
+    saved_run_ids = []  # 记录所有保存的 run_id
 
     for epoch in range(1, args.epochs + 1):
         model.train(); optimizer.zero_grad(set_to_none=True)
@@ -347,6 +475,25 @@ def main():
         print(f"test epoch={epoch}: acc={m_test['accuracy']:.4f} f1={m_test['f1_macro']:.4f} "
               f"f1@90={m_test['f1@90']:.4f} f1@95={m_test['f1@95']:.4f}")
 
+        # 保存每个 epoch 的模型
+        if args.save_every_epoch:
+            epoch_run_id = f"{run_id}_epoch{epoch}"
+            try:
+                save_transformer_model(model, tokenizer, epoch_run_id)
+                saved_run_ids.append(epoch_run_id)
+            except Exception as e:
+                print(f"  [保存 epoch{epoch} 模型失败] {e}")
+
+        # 保存最佳模型
+        if m_test['f1_macro'] > best_f1:
+            best_f1 = m_test['f1_macro']
+            try:
+                save_transformer_model(model, tokenizer, run_id)
+                if run_id not in saved_run_ids:
+                    saved_run_ids.append(run_id)
+            except Exception as e:
+                print(f"  [保存最佳模型失败] {e}")
+
         if args.save_predictions:
             save_results(test_texts, y_test, y_test_pred, test_proba, out_dir,
                          f"test_epoch{epoch}")
@@ -364,8 +511,13 @@ def main():
                     save_results(adv_texts_adv, y_adv, y_adv_pred, adv_proba, out_dir,
                                  f"adversarial_epoch{epoch}")
 
+    # 打印所有保存的模型
+    if saved_run_ids:
+        print(f"\n共保存 {len(saved_run_ids)} 个模型:")
+        for rid in saved_run_ids:
+            print(f"  saved_models/{rid}/")
+
     # 保存指标
-    os.makedirs(out_dir, exist_ok=True)
     df_all = pd.DataFrame(all_metrics)
     df_all.to_csv(os.path.join(out_dir, "metrics.csv"), index=False, encoding='utf-8-sig')
     print(f"\nSaved: {out_dir}/metrics.csv")

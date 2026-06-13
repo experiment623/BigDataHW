@@ -6,6 +6,8 @@
   python run_baselines.py --models w2v_c gas     # 指定模型
   python run_baselines.py --full                 # 全量训练集
   python run_baselines.py --adv                  # 含对抗评估
+  python run_baselines.py --load                 # 加载已保存模型直接评估
+  python run_baselines.py --load --models w2v_c  # 加载指定已保存模型
 """
 from __future__ import annotations
 import os, sys, time, argparse
@@ -14,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import pandas as pd
 from config import (
-    DATASET_DIR, OUTPUT_DIR, RANDOM_SEED, NUM_CLASSES, LABEL_MAP,
+    DATASET_DIR, OUTPUT_DIR, SAVED_MODELS_DIR, RANDOM_SEED, NUM_CLASSES, LABEL_MAP,
     SUBSET_BASELINE_TRAIN,
 )
 from data_processor import load_data, stratified_sample, load_adversarial_data, build_tfidf_vectorizer, preprocess_texts
@@ -76,15 +78,62 @@ def evaluate_and_save(model, model_key, test_texts, y_test, adv_df, adv_texts, y
     return results
 
 
+def get_model_path(model_key, saved_models_dir=None):
+    """获取模型保存路径"""
+    if saved_models_dir is None:
+        saved_models_dir = SAVED_MODELS_DIR
+    ext = '.pth' if model_key == 'gas' else '.pkl'
+    return os.path.join(saved_models_dir, f'{model_key}{ext}')
+
 def run_baseline(model_key, train_texts, y_train, val_texts, y_val,
                  test_texts, y_test, adv_df, adv_texts, y_adv,
-                 use_full=False, adv_eval=False):
+                 use_full=False, adv_eval=False, load_model=False):
     display_name, factory = MODELS_MAP[model_key]
     out_dir = os.path.join(OUTPUT_DIR, model_key)
     os.makedirs(out_dir, exist_ok=True)
 
     is_gas = (model_key == 'gas')
+    model_path = get_model_path(model_key)
 
+    # ── 加载已有模型 ──
+    if load_model:
+        if not os.path.exists(model_path):
+            print(f'\n[{display_name}] 未找到已保存模型: {model_path}，跳过')
+            return None
+        print(f'\n[{display_name}] 加载已保存模型: {model_path}')
+        model = factory()
+        try:
+            model.load(model_path)
+        except Exception as e:
+            print(f'  [加载失败] {e}')
+            return None
+
+        # GAS 需要加载 TF-IDF vectorizer
+        tfidf_vec = None
+        if is_gas:
+            vec_path = os.path.join(out_dir, 'tfidf_vec.pkl')
+            if not os.path.exists(vec_path):
+                print(f'  [错误] 未找到 TF-IDF vectorizer: {vec_path}')
+                return None
+            from data_processor import load_vectorizer
+            tfidf_vec = load_vectorizer(vec_path)
+
+        # 评估
+        if not adv_eval:
+            adv_df, adv_texts, y_adv = None, [], np.array([])
+        results = evaluate_and_save(model, model_key, test_texts, y_test,
+                                    adv_df, adv_texts, y_adv,
+                                    tfidf_vec, out_dir, train_time=0)
+
+        m = results['test']
+        print(f'  测试集 -> Acc={m["accuracy"]:.4f} F1={m["f1_macro"]:.4f} '
+              f'F1@90={m["f1@90"]:.4f} F1@95={m["f1@95"]:.4f}')
+        if 'adversarial' in results:
+            am = results['adversarial']
+            print(f'  对抗集 -> Acc={am["accuracy"]:.4f} F1={am["f1_macro"]:.4f}')
+        return results
+
+    # ── 训练新模型 ──
     # 子集采样 (GAS 也采样加速)
     if not use_full:
         sub_texts, sub_y = stratified_sample(train_texts, y_train, SUBSET_BASELINE_TRAIN)
@@ -118,6 +167,13 @@ def run_baseline(model_key, train_texts, y_train, val_texts, y_val,
     train_time = time.time() - t0
     print(f'  训练耗时: {train_time:.1f}s')
 
+    # 保存模型
+    try:
+        model.save(model_path)
+        print(f'  模型已保存: {model_path}')
+    except Exception as e:
+        print(f'  [保存模型失败] {e}')
+
     # 评估
     if not adv_eval:
         adv_df, adv_texts, y_adv = None, [], np.array([])
@@ -142,13 +198,19 @@ def main():
                         choices=['all', 'w2v_w', 'w2v_c', 'w2v_gbdt', 'd2v_gbdt', 'gas'])
     parser.add_argument('--full', action='store_true', help='使用全量训练集')
     parser.add_argument('--adv', action='store_true', help='含对抗评估')
+    parser.add_argument('--load', action='store_true', help='加载已保存模型直接评估（跳过训练）')
     args = parser.parse_args()
 
     models_to_run = list(MODELS_MAP.keys()) if args.models == ['all'] else args.models
 
-    print('=' * 60)
-    print(f'  Baseline 模型训练 [{len(models_to_run)} 个]')
-    print('=' * 60)
+    if args.load:
+        print('=' * 60)
+        print(f'  加载已保存 Baseline 模型 [{len(models_to_run)} 个]')
+        print('=' * 60)
+    else:
+        print('=' * 60)
+        print(f'  Baseline 模型训练 [{len(models_to_run)} 个]')
+        print('=' * 60)
 
     # 加载数据
     train_texts, y_train = load_data(os.path.join(DATASET_DIR, 'ChiFraud_train.csv'))
@@ -165,7 +227,7 @@ def main():
     for mkey in models_to_run:
         res = run_baseline(mkey, train_texts, y_train, val_texts, y_val,
                           test_texts, y_test, adv_df, adv_texts, y_adv,
-                          use_full=args.full, adv_eval=args.adv)
+                          use_full=args.full, adv_eval=args.adv, load_model=args.load)
         if res:
             all_test_metrics.append(res['test'])
 

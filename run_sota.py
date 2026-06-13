@@ -5,6 +5,7 @@ Strong ChiFraud SOTA experiments — 字符级 N-gram + 强分类器
   python run_sota.py --experiments char15_svc_c1         # 跑单个
   python run_sota.py --experiments all                   # 全跑
   python run_sota.py --experiments all --save-predictions --adv
+  python run_sota.py --experiments all --load            # 加载已保存模型评估
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from data_processor import load_adversarial_data
 ROOT = Path(__file__).resolve().parent
 DATASET_DIR = ROOT / "dataset"
 OUTPUT_DIR = ROOT / "output"
+SAVED_MODELS_DIR = ROOT / "saved_models"
 RANDOM_SEED = 42
 LABELS = list(range(10))
 
@@ -145,6 +147,33 @@ def make_pipeline(name: str) -> tuple[Pipeline, dict]:
     return pipe, serializable
 
 
+def get_sota_model_path(experiment_name: str) -> Path:
+    """获取 SOTA 模型保存路径"""
+    SAVED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    return SAVED_MODELS_DIR / f"{experiment_name}.pkl"
+
+
+def save_sota_model(model: Pipeline, experiment_name: str):
+    """保存 sklearn Pipeline 模型"""
+    import pickle
+    path = get_sota_model_path(experiment_name)
+    with open(path, 'wb') as f:
+        pickle.dump(model, f)
+    print(f"  模型已保存: {path}")
+
+
+def load_sota_model(experiment_name: str) -> Pipeline:
+    """加载 sklearn Pipeline 模型"""
+    import pickle
+    path = get_sota_model_path(experiment_name)
+    if not path.exists():
+        raise FileNotFoundError(f"未找到已保存模型: {path}")
+    with open(path, 'rb') as f:
+        model = pickle.load(f)
+    print(f"  模型已加载: {path}")
+    return model
+
+
 def model_scores(model: Pipeline, texts: list[str]) -> tuple[np.ndarray, np.ndarray | None]:
     pred = model.predict(texts)
     clf = model.named_steps["clf"]
@@ -225,6 +254,7 @@ def parse_args():
     parser.add_argument("--save-predictions", action="store_true")
     parser.add_argument("--train-with-val", action="store_true")
     parser.add_argument("--adv", action="store_true", help="含对抗评估")
+    parser.add_argument("--load", action="store_true", help="加载已保存模型直接评估（跳过训练）")
     parser.add_argument("--limit-train", type=int, default=0)
     parser.add_argument("--limit-eval", type=int, default=0)
     return parser.parse_args()
@@ -268,12 +298,30 @@ def main():
     for experiment in experiments:
         print(f"\n=== {experiment} ===", flush=True)
         model, config = make_pipeline(experiment)
-        start = time.time()
-        model.fit(fit_texts, fit_y)
-        train_time = time.time() - start
+
+        if args.load:
+            # 加载已保存模型
+            try:
+                model = load_sota_model(experiment)
+            except FileNotFoundError as e:
+                print(f"  [跳过] {e}")
+                continue
+            train_time = 0.0
+        else:
+            # 训练新模型
+            start = time.time()
+            model.fit(fit_texts, fit_y)
+            train_time = time.time() - start
+            # 保存模型
+            try:
+                save_sota_model(model, experiment)
+            except Exception as e:
+                print(f"  [保存模型失败] {e}")
+
         vec = model.named_steps["tfidf"]
         vsize = len(vec.vocabulary_) if hasattr(vec, "vocabulary_") else int(getattr(vec, "n_features", 0))
-        print(f"trained in {train_time:.1f}s, vocab={vsize}")
+        if not args.load:
+            print(f"trained in {train_time:.1f}s, vocab={vsize}")
 
         for split, texts, y_true, raw_texts in eval_splits:
             y_pred, score = model_scores(model, texts)

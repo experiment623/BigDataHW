@@ -27,6 +27,7 @@ models/sota_transformer/
 
 # 输出目录
 output/
+saved_models/
 
 # 系统文件
 .DS_Store

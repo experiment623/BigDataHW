@@ -1,9 +1,19 @@
 """
 ChiFraud 多模型加权集成
 =======================
+集成配置自动保存到 saved_models/ensemble_{name}.json
+
 用法:
+  # 默认配置运行
   python run_ensemble_sota.py --save-predictions
+
+  # 自动发现模型 + 调优（调优后自动保存配置）
   python run_ensemble_sota.py --discover --auto-tune --save-predictions --name ensemble_auto
+
+  # 加载已保存配置直接评估（无需重新调优）
+  python run_ensemble_sota.py --load-config --name ensemble_auto --save-predictions
+
+  # 手动指定模型和权重
   python run_ensemble_sota.py --models model1_test model2_test --weights 1.0 1.0
 """
 from __future__ import annotations
@@ -18,6 +28,7 @@ from data_processor import load_adversarial_data, load_data
 
 OUTPUT_DIR = Path("output")
 DATASET_DIR = Path("dataset")
+SAVED_MODELS_DIR = Path("saved_models")
 LABELS = list(range(10))
 SCORE_COLS = [f"score_{label}" for label in LABELS]
 
@@ -311,6 +322,31 @@ def upsert_summary(row, output_path):
     out_df.to_csv(output_path, index=False, encoding="utf-8-sig")
 
 
+def get_ensemble_config_path(name: str) -> Path:
+    """获取集成配置保存路径"""
+    SAVED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    return SAVED_MODELS_DIR / f"ensemble_{name}.json"
+
+
+def save_ensemble_config(name: str, config: dict):
+    """保存集成配置（模型列表、权重、因子）"""
+    path = get_ensemble_config_path(name)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    print(f"集成配置已保存: {path}")
+
+
+def load_ensemble_config(name: str) -> dict | None:
+    """加载已保存的集成配置"""
+    path = get_ensemble_config_path(name)
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    print(f"集成配置已加载: {path}")
+    return config
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--name", default="ensemble")
@@ -320,6 +356,7 @@ def parse_args():
     p.add_argument("--discover", action="store_true", help="自动使用 output/predictions 中所有 10 类 score CSV")
     p.add_argument("--include-ensembles", action="store_true", help="discover 时也纳入已有 ensemble_*_test.csv")
     p.add_argument("--auto-tune", action="store_true", help="在当前带标签 split 上搜索模型权重和类别因子")
+    p.add_argument("--load-config", action="store_true", help="加载已保存的集成配置（跳过 auto-tune）")
     p.add_argument("--objective", choices=["sota_margin", "balanced_pr", "f1_macro"], default="sota_margin")
     p.add_argument("--search-rounds", type=int, default=3)
     p.add_argument("--random-trials", type=int, default=400)
@@ -357,11 +394,38 @@ def main():
         return
 
     score_stack = np.stack(score_list, axis=0)
+
+    # ── 加载已有集成配置 ──
+    if args.load_config:
+        saved_cfg = load_ensemble_config(args.name)
+        if saved_cfg is not None:
+            model_names = saved_cfg["models"]
+            weights = np.array(saved_cfg["weights"], dtype=np.float64)
+            factors = np.array(saved_cfg["factors"], dtype=np.float64)
+            # 重新加载对应的 score 数据
+            try:
+                y_true, score_list = load_scores(model_names, pred_dir)
+                score_stack = np.stack(score_list, axis=0)
+            except FileNotFoundError as e:
+                print(f"加载配置成功但 predictions 文件缺失: {e}")
+                return
+        else:
+            print(f"未找到已保存配置: {get_ensemble_config_path(args.name)}")
+            print("将使用命令行参数继续...")
+
     if args.auto_tune:
         weights, factors, _ = tune_ensemble(
             y_true, score_stack, weights, factors,
             args.objective, args.search_rounds, args.random_trials, args.seed,
         )
+        # 调优后自动保存配置
+        config_to_save = {
+            "models": model_names,
+            "weights": [round(float(v), 8) for v in weights],
+            "factors": [round(float(v), 8) for v in factors],
+            "objective": args.objective,
+        }
+        save_ensemble_config(args.name, config_to_save)
 
     base_score = weighted_average(score_stack, weights)
     y_pred, adjusted = predict_from_base(base_score, factors)

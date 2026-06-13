@@ -11,9 +11,12 @@ OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
 LOG_DIR = os.path.join(BASE_DIR, 'logs')
 
+SAVED_MODELS_DIR = os.path.join(BASE_DIR, 'saved_models')
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(SAVED_MODELS_DIR, exist_ok=True)
 
 # 数据集路径
 TRAIN_PATH = os.path.join(DATASET_DIR, 'ChiFraud_train.csv')
