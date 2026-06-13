@@ -240,8 +240,7 @@ def run_cmd(cmd: list[str], desc: str, dry_run: bool = False) -> int:
 
 
 def run_baselines(args) -> int:
-    """运行 Baseline 模型"""
-    common = build_common_args(args)
+    """运行 Baseline 模型（不支持 --save-predictions，仅传 --adv）"""
     cmd = [PYTHON, str(BASELINE_SCRIPT)]
     if args.load:
         cmd.append("--load")
@@ -249,7 +248,8 @@ def run_baselines(args) -> int:
         cmd.extend(["--models", "all"])
         if args.bl_full:
             cmd.append("--full")
-    cmd.extend(common)
+    if args.adv:
+        cmd.append("--adv")
     return run_cmd(cmd, "Baseline 模型 (w2v_w, w2v_c, w2v_gbdt, d2v_gbdt, gas)", args.dry_run)
 
 
