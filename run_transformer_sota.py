@@ -14,7 +14,7 @@ import pandas as pd
 import torch
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from data_processor import load_adversarial_data
@@ -44,10 +44,10 @@ def load_split(name):
     return df["Text"].astype(str).tolist(), df["Label_id"].astype(int).to_numpy()
 
 
-def stratified_limit(texts, y, limit):
+def stratified_limit(texts, y, limit, seed=RANDOM_SEED):
     if not limit or limit >= len(y): return texts, y
     idx = np.arange(len(y))
-    _, keep = train_test_split(idx, test_size=limit, stratify=y, random_state=RANDOM_SEED, shuffle=True)
+    _, keep = train_test_split(idx, test_size=limit, stratify=y, random_state=seed, shuffle=True)
     keep = np.sort(keep)
     return [texts[i] for i in keep], y[keep]
 
@@ -63,17 +63,43 @@ def class_weights(y, mode, device):
     return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
+def make_weighted_sampler(y, power, epoch_size, seed):
+    if power <= 0:
+        return None
+    counts = np.bincount(y, minlength=len(LABELS)).astype(np.float64)
+    counts = np.maximum(counts, 1.0)
+    sample_weights = counts[y] ** (-power)
+    sample_weights = sample_weights / sample_weights.mean()
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(sample_weights, dtype=torch.double),
+        num_samples=epoch_size or len(y),
+        replacement=True,
+        generator=generator,
+    )
+
+
+def make_collate_fn(tokenizer, max_length, with_labels):
+    def collate(batch):
+        texts, labels = zip(*batch)
+        encoded = tokenizer(list(texts), max_length=max_length, padding=True,
+                            truncation=True, return_tensors="pt")
+        if with_labels:
+            encoded["labels"] = torch.tensor(labels, dtype=torch.long)
+        return encoded
+    return collate
+
+
 def evaluate(model, tokenizer, texts, y_true, args, device):
     ds = TextDataset(texts, y_true)
     loader = DataLoader(ds, batch_size=args.eval_batch_size, shuffle=False,
-                        collate_fn=lambda batch: tokenizer([b[0] for b in batch],
-                                                           max_length=args.max_length, padding=True,
-                                                           truncation=True, return_tensors="pt"))
+                        collate_fn=make_collate_fn(tokenizer, args.max_length, with_labels=False))
     scores = []
     model.eval()
     with torch.no_grad():
         for batch in loader:
-            batch = {k: v.to(device) for k, v in batch.items()}
+            batch = {k: v.to(device) for k, v in batch.items() if k != "labels"}
             with torch.amp.autocast("cuda", enabled=args.fp16 and device.type == "cuda"):
                 logits = model(**batch).logits
             scores.append(torch.softmax(logits.float(), dim=-1).cpu().numpy())
@@ -104,8 +130,8 @@ def compute_metrics_full(model_name, y_true, y_pred, proba, epoch, train_time):
         'recall_macro': round(recall_score(y_true, y_pred, average='macro', zero_division=0), 4),
         'f1_macro': round(f1_score(y_true, y_pred, average='macro', zero_division=0), 4),
         'f1_weighted': round(f1_score(y_true, y_pred, average='weighted', zero_division=0), 4),
-        'recall@90': r90[1], 'precision@90': r90[0], 'f1@90': r90[2], 'coverage@90': r90[3],
-        'recall@95': r95[1], 'precision@95': r95[0], 'f1@95': r95[2], 'coverage@95': r95[3],
+        'recall@90': r90[0], 'precision@90': r90[1], 'f1@90': r90[2], 'coverage@90': r90[3],
+        'recall@95': r95[0], 'precision@95': r95[1], 'f1@95': r95[2], 'coverage@95': r95[3],
         'per_class_f1_json': json.dumps({str(k): round(float(v),4) for k,v in zip(LABELS, per_f1)}),
         'per_class_recall_json': json.dumps({str(k): round(float(v),4) for k,v in zip(LABELS, per_recall)}),
         'train_time_s': round(train_time, 1), 'n_samples': len(y_true),
@@ -123,6 +149,22 @@ def save_results(texts, y_true, y_pred, proba, out_dir, split):
     df.to_csv(os.path.join(out_dir, f'{split}_results.csv'), index=False, encoding='utf-8-sig')
 
 
+def save_score_csv(run_id, y_true, y_pred, proba, epoch, split="test"):
+    pred_dir = OUTPUT_DIR / "predictions"
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{run_id}_epoch{epoch}_{split}"
+    score_cols = {f"score_{label}": proba[:, label] for label in LABELS}
+    df = pd.DataFrame({
+        "id": np.arange(len(y_true)),
+        "label_true": y_true,
+        "label_pred": y_pred,
+        **score_cols,
+    })
+    path = pred_dir / f"{stem}.csv"
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"score csv saved: {path}")
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--model-name", default="hfl/chinese-macbert-base")
@@ -136,6 +178,11 @@ def parse_args():
     p.add_argument("--warmup-ratio", type=float, default=0.06)
     p.add_argument("--weight-decay", type=float, default=0.01)
     p.add_argument("--class-weight", choices=["none","sqrt","balanced"], default="sqrt")
+    p.add_argument("--sampler-weight-power", type=float, default=0.0,
+                   help=">0 时使用 WeightedRandomSampler，建议 0.35~0.75 增强少数类")
+    p.add_argument("--sampler-epoch-size", type=int, default=0,
+                   help="WeightedRandomSampler 每个 epoch 抽样数，0 表示等于训练集大小")
+    p.add_argument("--seed", type=int, default=RANDOM_SEED)
     p.add_argument("--fp16", action="store_true", default=True)
     p.add_argument("--no-fp16", dest="fp16", action="store_false")
     p.add_argument("--train-with-val", action="store_true")
@@ -150,17 +197,17 @@ def parse_args():
 
 def main():
     args = parse_args()
-    set_seed(RANDOM_SEED)
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device}")
 
     train_texts, y_train = load_split("ChiFraud_train.csv")
     val_texts, y_val = load_split("ChiFraud_t2022.csv")
     test_texts, y_test = load_split("ChiFraud_t2023.csv")
-    train_texts, y_train = stratified_limit(train_texts, y_train, args.limit_train)
+    train_texts, y_train = stratified_limit(train_texts, y_train, args.limit_train, args.seed)
     if args.limit_eval:
-        val_texts, y_val = stratified_limit(val_texts, y_val, args.limit_eval)
-        test_texts, y_test = stratified_limit(test_texts, y_test, args.limit_eval)
+        val_texts, y_val = stratified_limit(val_texts, y_val, args.limit_eval, args.seed)
+        test_texts, y_test = stratified_limit(test_texts, y_test, args.limit_eval, args.seed)
 
     fit_texts, fit_y = train_texts, y_train
     if args.train_with_val:
@@ -175,12 +222,14 @@ def main():
         label2id={str(i): i for i in LABELS},
     ).to(device)
 
+    generator = torch.Generator()
+    generator.manual_seed(args.seed)
+    sampler = make_weighted_sampler(fit_y, args.sampler_weight_power, args.sampler_epoch_size, args.seed)
     train_loader = DataLoader(
-        TextDataset(fit_texts, fit_y), batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers,
-        collate_fn=lambda batch: tokenizer([b[0] for b in batch],
-                                           max_length=args.max_length, padding=True,
-                                           truncation=True, return_tensors="pt"))
+        TextDataset(fit_texts, fit_y), batch_size=args.batch_size,
+        shuffle=(sampler is None), sampler=sampler,
+        num_workers=args.num_workers, generator=generator,
+        collate_fn=make_collate_fn(tokenizer, args.max_length, with_labels=True))
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     updates_per_epoch = max(1, len(train_loader) // args.grad_accum)
@@ -230,6 +279,7 @@ def main():
         if args.save_predictions:
             save_results(test_texts, y_test, y_test_pred, test_proba, out_dir,
                          f"test_epoch{epoch}")
+            save_score_csv(run_id, y_test, y_test_pred, test_proba, epoch, "test")
 
         # 对抗评估
         if args.adv:
@@ -244,6 +294,7 @@ def main():
                                  f"adversarial_epoch{epoch}")
 
     # 保存指标
+    os.makedirs(out_dir, exist_ok=True)
     df_all = pd.DataFrame(all_metrics)
     df_all.to_csv(os.path.join(out_dir, "metrics.csv"), index=False, encoding='utf-8-sig')
     print(f"\nSaved: {out_dir}/metrics.csv")

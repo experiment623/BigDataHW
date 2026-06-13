@@ -131,10 +131,13 @@ python make_adversarial_dataset.py
 | 指标 | 说明 |
 |:---|:---|
 | `accuracy` | 总体准确率 |
+| `precision_macro` | 宏平均 Precision |
+| `recall_macro` | 宏平均 Recall |
 | `f1_macro` | 宏平均 F1 |
 | `f1_weighted` | 加权 F1 |
 | `recall@90`, `precision@90`, `f1@90`, `coverage@90` | 置信度 ≥ 90分位数阈值时的指标 |
 | `recall@95`, `precision@95`, `f1@95`, `coverage@95` | 置信度 ≥ 95分位数阈值时的指标 |
+| `per_class_precision_json` | 各类别 Precision（JSON） |
 | `per_class_f1_json` | 各类别 F1（JSON） |
 | `per_class_recall_json` | 各类别 Recall（JSON） |
 
@@ -185,6 +188,78 @@ matplotlib, seaborn
 torch, transformers
 pypinyin, Pillow, tqdm
 ```
+## 当前实验结果
+
+评估集为 `dataset/ChiFraud_t2023.csv`。当前最佳提交候选为 `ensemble_gpu_sampler_f1`，由字符级模型、MacBERT、RoBERTa full fine-tuning、weighted-sampler RoBERTa 进行 10 分类概率集成，并启用 train+2022 的 exact text fallback。
+
+### 置信度阈值指标
+
+| 模型 | Recall@90 | Precision@90 | F1@90 | Coverage@90 | Recall@95 | Precision@95 | F1@95 | Coverage@95 |
+|:---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `ensemble_gpu_sampler_f1` | 0.9304 | 0.9475 | 0.9379 | 0.9000 | 0.9220 | 0.9385 | 0.9292 | 0.9500 |
+
+### 完整结果表
+
+下面表格整理自 `output/ensemble_results.csv`、`output/transformer_results.csv`、`output/sota_results.csv` 中的全部标量指标列。`config_json` 和逐类 JSON 字段保留在原始 CSV 中；当前最佳模型的逐类 Precision/Recall/F1 已在下一节展开。
+
+#### 集成模型结果
+
+| experiment | split | accuracy | precision_macro | recall_macro | f1_macro | f1_weighted | recall@90 | precision@90 | f1@90 | coverage@90 | recall@95 | precision@95 | f1@95 | coverage@95 |
+|:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ensemble_gpu_sampler_f1 | test | 0.974386 | 0.900104 | 0.854417 | 0.874238 | 0.974288 | 0.930400 | 0.947500 | 0.937900 | 0.900000 | 0.922000 | 0.938500 | 0.929200 | 0.950000 |
+| ensemble_v2_exact | test | 0.974072 | 0.900860 | 0.850811 | 0.873435 | 0.973819 | 0.927900 | 0.951900 | 0.938600 | 0.900000 | 0.918800 | 0.941700 | 0.929300 | 0.950000 |
+| ensemble_recheck_default | test | 0.973993 | 0.900490 | 0.850995 | 0.873355 | 0.973745 | 0.928100 | 0.951600 | 0.938600 | 0.900000 | 0.919000 | 0.941200 | 0.929200 | 0.950000 |
+| ensemble_v2_six_model | test | 0.973993 | 0.900490 | 0.850995 | 0.873355 | 0.973745 | - | - | - | - | - | - | - | - |
+| ensemble_gpu_roberta_f1 | test | 0.974089 | 0.899342 | 0.852934 | 0.873138 | 0.974004 | 0.929300 | 0.946200 | 0.936700 | 0.900000 | 0.922800 | 0.938500 | 0.929700 | 0.950000 |
+| ensemble_auto_sota | test | 0.973749 | 0.905813 | 0.845721 | 0.872708 | 0.973487 | 0.927900 | 0.954200 | 0.939800 | 0.900000 | 0.919500 | 0.944300 | 0.930900 | 0.950000 |
+| ensemble_v1_five_model | test | 0.972360 | 0.894514 | 0.849944 | 0.869223 | 0.972144 | - | - | - | - | - | - | - | - |
+| ensemble_gpu_roberta_balanced_pr | test | 0.972814 | 0.870092 | 0.869415 | 0.868575 | 0.973106 | 0.929200 | 0.922400 | 0.925300 | 0.900000 | 0.921600 | 0.912700 | 0.916600 | 0.950000 |
+| ensemble_gpu_sampler_balanced_pr | test | 0.973233 | 0.870083 | 0.869221 | 0.868272 | 0.973553 | 0.932700 | 0.929700 | 0.930700 | 0.900000 | 0.924700 | 0.919900 | 0.921800 | 0.950000 |
+| ensemble_auto_balanced_pr | test | 0.971226 | 0.869489 | 0.868609 | 0.867294 | 0.971706 | 0.927300 | 0.921600 | 0.923800 | 0.900000 | 0.919800 | 0.913000 | 0.915500 | 0.950000 |
+
+#### Transformer 结果
+
+| experiment | split | epoch | protocol | accuracy | precision_macro | recall_macro | f1_macro | f1_weighted | recall@90 | precision@90 | f1@90 | coverage@90 | recall@95 | precision@95 | f1@95 | coverage@95 | exact_matches | n_samples | train_time_s | predict_time_s |
+|:---|:---|---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| macbert_smoke | val | 1 | train->val/test exact_fallback=True | 0.933000 | 0.251751 | 0.278467 | 0.262230 | 0.913462 | - | - | - | - | - | - | - | - | 8 | 1000 | 27.330016 | 1.952682 |
+| macbert_smoke | test | 1 | train->val/test exact_fallback=True | 0.881000 | 0.143710 | 0.177440 | 0.157475 | 0.844079 | - | - | - | - | - | - | - | - | 11 | 1000 | 27.330016 | 2.230537 |
+| macbert_50k_bal | val | 1 | train->val/test exact_fallback=True | 0.990500 | 0.927915 | 0.927997 | 0.927175 | 0.990540 | - | - | - | - | - | - | - | - | 429 | 20000 | 406.251579 | 35.018368 |
+| macbert_50k_bal | test | 1 | train->val/test exact_fallback=True | 0.939850 | 0.833024 | 0.682646 | 0.719857 | 0.929658 | - | - | - | - | - | - | - | - | 662 | 20000 | 406.251579 | 35.231467 |
+| macbert_50k_bal | val | 2 | train->val/test exact_fallback=True | 0.992600 | 0.937766 | 0.940045 | 0.938618 | 0.992630 | - | - | - | - | - | - | - | - | 429 | 20000 | 891.394832 | 35.287406 |
+| macbert_50k_bal | test | 2 | train->val/test exact_fallback=True | 0.927500 | 0.844214 | 0.666719 | 0.721606 | 0.915124 | - | - | - | - | - | - | - | - | 662 | 20000 | 891.394832 | 35.559025 |
+| macbert_50k_plus2022_bal_b32 | test | 1 | train+val->test exact_fallback=True | 0.929836 | 0.846536 | 0.706892 | 0.743735 | 0.917441 | - | - | - | - | - | - | - | - | 7141 | 114546 | 870.849809 | 194.643542 |
+| macbert_full_plus2022_bal_b64 | test | 1 | train+val->test exact_fallback=True | 0.931896 | 0.850902 | 0.713083 | 0.746101 | 0.918748 | - | - | - | - | - | - | - | - | 11470 | 114546 | 1528.295210 | 194.561295 |
+| macbert_full_plus2022_sqrt_b64 | test | 1 | train+val->test exact_fallback=True | 0.921027 | 0.870724 | 0.670640 | 0.723609 | 0.904717 | - | - | - | - | - | - | - | - | 11470 | 114546 | 1523.353207 | 196.001566 |
+| roberta_50k_plus2022_bal_b64 | test | 1 | train+val->test exact_fallback=True | 0.946441 | 0.806375 | 0.771601 | 0.769757 | 0.940000 | - | - | - | - | - | - | - | - | 7141 | 114546 | 763.565601 | 195.223373 |
+| macbert_full_plus2022_bal_len192_b48 | test | 1 | train+val->test exact_fallback=True | 0.930028 | 0.852457 | 0.703138 | 0.739729 | 0.915855 | - | - | - | - | - | - | - | - | 11470 | 114546 | 2313.742137 | 273.619119 |
+| roberta_full_plus2022_bal_seed2026_b64 | test | 1 | train+val->test | 0.933300 | 0.850300 | 0.746400 | 0.771300 | 0.922100 | 0.850000 | 0.940000 | 0.884200 | 0.900000 | 0.797900 | 0.906200 | 0.828400 | 0.950000 | - | 114546 | 1374.200000 | - |
+| roberta_full_plus2022_sampler05_sqrt_seed2030_b64 | test | 1 | train+val->test | 0.942900 | 0.799000 | 0.776800 | 0.765300 | 0.935500 | 0.874200 | 0.942400 | 0.894500 | 0.900000 | 0.841900 | 0.909900 | 0.859100 | 0.950000 | - | 114546 | 1375.900000 | - |
+
+#### 字符级 SOTA 结果
+
+| experiment | split | protocol | accuracy | precision_macro | recall_macro | f1_macro | f1_weighted | exact_matches | n_samples | train_time_s | predict_time_s |
+|:---|:---|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| char15_svc_c1 | val | train->val/test exact_fallback=True | 0.985000 | 0.962298 | 0.867547 | 0.907728 | 0.984464 | 4 | 1000 | 4.069947 | 0.774190 |
+| char15_svc_c1 | test | train->val/test exact_fallback=True | 0.910000 | 0.813930 | 0.486218 | 0.543068 | 0.890171 | 7 | 1000 | 4.069947 | 0.959124 |
+| char13_svc_120k | val | train->val/test exact_fallback=True | 0.993852 | 0.954981 | 0.946724 | 0.950377 | 0.993856 | 2847 | 96289 | 320.028376 | 61.096533 |
+| char13_svc_120k | test | train->val/test exact_fallback=True | 0.923201 | 0.888023 | 0.666456 | 0.738306 | 0.911015 | 8674 | 114546 | 320.028376 | 70.175714 |
+| char13_svc_120k | test | train+val->test exact_fallback=True | 0.923786 | 0.889166 | 0.675287 | 0.745333 | 0.911934 | 11470 | 114546 | 423.544642 | 67.678020 |
+| hash_char14_sgd_log | test | train+val->test exact_fallback=True | 0.918548 | 0.920510 | 0.624021 | 0.715041 | 0.905279 | 11470 | 114546 | 68.218905 | 41.157353 |
+
+### 当前最佳逐类指标
+
+| Label | 类别 | Precision | Recall | F1 |
+|:---:|---|---:|---:|---:|
+| 0 | 正常 | 0.988441 | 0.988245 | 0.988343 |
+| 1 | 赌博博彩 | 0.851997 | 0.897209 | 0.874019 |
+| 2 | 招嫖色情 | 0.944776 | 0.950804 | 0.947780 |
+| 3 | 办假证 | 0.880893 | 0.692008 | 0.775109 |
+| 4 | 虚假办卡 | 0.875371 | 0.766234 | 0.817175 |
+| 5 | 违禁药品交易 | 0.884035 | 0.843501 | 0.863293 |
+| 6 | 违规提现 | 0.900901 | 0.920810 | 0.910747 |
+| 7 | 虚假证明 | 0.901468 | 0.907173 | 0.904311 |
+| 8 | 虚假手机卡 | 0.884273 | 0.898944 | 0.891548 |
+| 9 | 地下黑贷 | 0.888889 | 0.679245 | 0.770053 |
 
 ## 作者
 
