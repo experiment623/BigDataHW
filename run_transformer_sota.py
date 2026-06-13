@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
@@ -52,15 +53,37 @@ def stratified_limit(texts, y, limit, seed=RANDOM_SEED):
     return [texts[i] for i in keep], y[keep]
 
 
-def class_weights(y, mode, device):
+HOMOGLYPH_MAP = str.maketrans({
+    "证": "証", "户": "戶", "药": "藥", "贷": "貸", "钱": "錢",
+    "银": "銀", "网": "網", "微": "薇", "信": "訫", "卡": "咔",
+})
+FULLWIDTH_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
+SEPARATORS = [" ", "-", "_", ".", "·", "*", "#"]
+
+
+def class_weights(y, mode, device, beta=0.9999):
     if mode == "none": return None
     counts = np.bincount(y, minlength=len(LABELS)).astype(np.float64)
     counts = np.maximum(counts, 1.0)
     if mode == "balanced": weights = counts.sum() / (len(LABELS) * counts)
     elif mode == "sqrt": weights = np.sqrt(counts.sum() / (len(LABELS) * counts))
+    elif mode == "effective":
+        effective_num = 1.0 - np.power(beta, counts)
+        weights = (1.0 - beta) / np.maximum(effective_num, 1e-12)
     else: raise ValueError(f"unknown: {mode}")
     weights = weights / weights.mean()
     return torch.tensor(weights, dtype=torch.float32, device=device)
+
+
+def compute_loss(logits, labels, loss_weight, args):
+    if args.loss_type == "ce":
+        return F.cross_entropy(logits, labels, weight=loss_weight,
+                               label_smoothing=args.label_smoothing)
+    ce = F.cross_entropy(logits, labels, weight=loss_weight, reduction="none",
+                         label_smoothing=args.label_smoothing)
+    pt = torch.softmax(logits.float(), dim=-1).gather(1, labels[:, None]).squeeze(1)
+    focal = torch.pow(1.0 - pt.clamp(1e-6, 1.0), args.focal_gamma)
+    return (focal * ce).mean()
 
 
 def make_weighted_sampler(y, power, epoch_size, seed):
@@ -78,6 +101,44 @@ def make_weighted_sampler(y, power, epoch_size, seed):
         replacement=True,
         generator=generator,
     )
+
+
+def perturb_text(text, rng):
+    text = str(text)
+    if not text:
+        return text
+    chars = list(text)
+    if len(chars) > 6 and rng.random() < 0.55:
+        n_insert = min(4, max(1, len(chars) // 24))
+        for _ in range(n_insert):
+            pos = int(rng.integers(1, len(chars)))
+            chars.insert(pos, rng.choice(SEPARATORS))
+    text = "".join(chars)
+    if rng.random() < 0.45:
+        text = text.translate(FULLWIDTH_DIGITS)
+    if rng.random() < 0.35:
+        text = text.translate(HOMOGLYPH_MAP)
+    if len(text) > 20 and rng.random() < 0.35:
+        drop_n = min(3, max(1, len(text) // 80))
+        drop_pos = set(rng.choice(len(text), size=drop_n, replace=False).tolist())
+        text = "".join(ch for i, ch in enumerate(text) if i not in drop_pos)
+    return text
+
+
+def augment_minority_texts(texts, y, factor, labels, seed):
+    if factor <= 0:
+        return texts, y
+    label_set = {int(v) for v in labels}
+    rng = np.random.default_rng(seed)
+    new_texts, new_y = list(texts), [int(v) for v in y]
+    for text, label in zip(texts, y):
+        label = int(label)
+        if label not in label_set:
+            continue
+        for _ in range(factor):
+            new_texts.append(perturb_text(text, rng))
+            new_y.append(label)
+    return new_texts, np.asarray(new_y, dtype=np.int64)
 
 
 def make_collate_fn(tokenizer, max_length, with_labels):
@@ -177,11 +238,19 @@ def parse_args():
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--warmup-ratio", type=float, default=0.06)
     p.add_argument("--weight-decay", type=float, default=0.01)
-    p.add_argument("--class-weight", choices=["none","sqrt","balanced"], default="sqrt")
+    p.add_argument("--class-weight", choices=["none","sqrt","balanced","effective"], default="sqrt")
+    p.add_argument("--effective-beta", type=float, default=0.9999)
+    p.add_argument("--loss-type", choices=["ce","focal"], default="ce")
+    p.add_argument("--focal-gamma", type=float, default=1.5)
+    p.add_argument("--label-smoothing", type=float, default=0.0)
     p.add_argument("--sampler-weight-power", type=float, default=0.0,
                    help=">0 时使用 WeightedRandomSampler，建议 0.35~0.75 增强少数类")
     p.add_argument("--sampler-epoch-size", type=int, default=0,
                    help="WeightedRandomSampler 每个 epoch 抽样数，0 表示等于训练集大小")
+    p.add_argument("--augment-minority", type=int, default=0,
+                   help="少数类文本扰动增强倍数；0 表示关闭")
+    p.add_argument("--augment-labels", nargs="+", type=int, default=[3, 4, 8, 9],
+                   help="需要做文本扰动增强的标签")
     p.add_argument("--seed", type=int, default=RANDOM_SEED)
     p.add_argument("--fp16", action="store_true", default=True)
     p.add_argument("--no-fp16", dest="fp16", action="store_false")
@@ -213,6 +282,9 @@ def main():
     if args.train_with_val:
         fit_texts = train_texts + val_texts
         fit_y = np.concatenate([y_train, y_val])
+    fit_texts, fit_y = augment_minority_texts(
+        fit_texts, fit_y, args.augment_minority, args.augment_labels, args.seed
+    )
 
     print(f"Fit={len(fit_texts)} Val={len(val_texts)} Test={len(test_texts)}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
@@ -236,8 +308,7 @@ def main():
     total_steps = updates_per_epoch * args.epochs
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=int(total_steps * args.warmup_ratio),
                                                 num_training_steps=total_steps)
-    loss_weight = class_weights(fit_y, args.class_weight, device)
-    loss_fn = torch.nn.CrossEntropyLoss(weight=loss_weight)
+    loss_weight = class_weights(fit_y, args.class_weight, device, args.effective_beta)
     scaler = torch.amp.GradScaler("cuda", enabled=args.fp16 and device.type == "cuda")
 
     run_id = args.run_name.replace("/", "_")
@@ -256,7 +327,7 @@ def main():
             batch = {k: v.to(device) for k, v in batch.items() if k != "labels"}
             with torch.amp.autocast("cuda", enabled=args.fp16 and device.type == "cuda"):
                 logits = model(**batch).logits
-                loss = loss_fn(logits, labels) / args.grad_accum
+                loss = compute_loss(logits, labels, loss_weight, args) / args.grad_accum
             scaler.scale(loss).backward()
             running += float(loss.detach().cpu()) * args.grad_accum
             if step % args.grad_accum == 0:
