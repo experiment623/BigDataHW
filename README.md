@@ -48,6 +48,9 @@ Final_hw/
 ├── run_sota.py                        ← ★ 创新方法：字符 N-gram SOTA（8 组配置）
 ├── run_transformer_sota.py            ← ★ 创新方法：Transformer 微调（MacBERT/RoBERTa）
 ├── run_ensemble_sota.py               ← ★ 创新方法：多模型加权集成
+├── run_all.py                         ← ★ 一键全流程运行（Python 主控）
+├── run_all.ps1                        ← ★ 一键全流程运行（PowerShell）
+├── run_all.sh                         ← ★ 一键全流程运行（Bash）
 │
 ├── make_adversarial_dataset.py        ← 对抗测试集生成
 ├── visualize.py                       ← 可视化（混淆矩阵/模型对比/学习曲线）
@@ -84,32 +87,122 @@ pip install -r requirements.txt
 
 ### 2. 准备数据（确保 dataset/ 下有 3 个 CSV 文件）
 
-### 3. 运行模型
+### 3. 一键运行（推荐）
+
+使用 `run_all.py` / `run_all.ps1` / `run_all.sh` 一次性跑完所有模型：
 
 ```bash
-# ===== Baseline（5 个，CPU 可跑）=====
-python run_baselines.py                             # 全部 5 个，各 30k 子集
-python run_baselines.py --models w2v_c gas          # 指定模型
-python run_baselines.py --full                      # 全量训练集
-python run_baselines.py --adv                       # 含对抗评估
+# ── Python 主控（功能最全，跨平台）──
+python run_all.py                                           # 首次完整训练（baseline→sota→transformer→ensemble）
+python run_all.py --load                                    # 仅加载已保存模型评估
+python run_all.py --adv --save-predictions --ensemble       # 含对抗评估 + 预测文件 + 集成
+python run_all.py --stages baseline sota                    # 只跑指定阶段
+python run_all.py --dry-run                                 # 仅打印要执行的命令，不实际运行
 
-# ===== 字符 N-gram SOTA（CPU）=====
-python run_sota.py --experiments all --save-predictions --adv
-python run_sota.py --experiments char15_svc_c1 --train-with-val
+# 并行运行（Windows/Linux 均可，注意 GPU 显存）
+python run_all.py --parallel
 
-# ===== Transformer 微调（需 GPU）=====
-python run_transformer_sota.py --train-with-val --epochs 2 --save-predictions --adv
+# 自定义 Transformer 配置
+python run_all.py --tf-epochs 3 --tf-class-weight balanced  # 覆盖所有 TF 配置的参数
+python run_all.py --tf-configs 1 3                          # 只跑第1和第3个 TF 配置
+python run_all.py --tf-list-configs                         # 列出所有 TF 配置
 
-# ===== 模型集成（需先跑 run_sota 和 run_transformer 生成预测）=====
-python run_ensemble_sota.py --save-predictions
+# 自定义 Ensemble
+python run_all.py --ensemble --ens-auto-tune --ens-name my_ensemble  # 自动调优权重
+python run_all.py --ensemble --ens-name ensemble_auto                # 加载已保存配置
 
-# ===== 可视化 =====
+# ── PowerShell（Windows）──
+.\run_all.ps1                                               # 完整训练
+.\run_all.ps1 -Load                                         # 仅评估
+.\run_all.ps1 -Adv -SavePred -Ensemble                      # 对抗+预测+集成
+.\run_all.ps1 -Parallel                                     # 并行运行
+
+# ── Bash（Linux/macOS）──
+bash run_all.sh                                             # 完整训练
+bash run_all.sh --load                                      # 仅评估
+bash run_all.sh --adv --save-pred --ensemble                # 对抗+预测+集成
+bash run_all.sh --parallel                                  # 并行运行
+```
+
+### 4. 单独运行每个模型
+
+如果需要更细粒度的控制，可以单独运行：
+
+#### Baseline（5 个，CPU 可跑）
+
+```bash
+python run_baselines.py                                    # 全部 5 个，各 30k 子集
+python run_baselines.py --models w2v_c gas                 # 指定模型
+python run_baselines.py --full                             # 全量训练集
+python run_baselines.py --adv                              # 含对抗评估
+python run_baselines.py --load                             # 加载已保存模型直接评估
+python run_baselines.py --load --models w2v_c              # 加载指定已保存模型
+python run_baselines.py --adv --save-predictions           # 对抗评估 + 保存预测文件
+```
+
+#### 字符 N-gram SOTA（CPU）
+
+```bash
+python run_sota.py --experiments all                       # 全部 8 组配置
+python run_sota.py --experiments char15_svc_c1             # 单个实验
+python run_sota.py --experiments all --save-predictions --adv  # 保存预测 + 对抗
+python run_sota.py --experiments all --train-with-val      # 使用 train+val 训练
+python run_sota.py --experiments all --load                # 加载已保存模型评估
+```
+
+#### Transformer 微调（需 GPU）
+
+```bash
+# 基础训练
+python run_transformer_sota.py --train-with-val --epochs 3 --save-predictions --adv
+
+# 不同训练方式自动保存到不同目录（run_id 含关键参数）
+python run_transformer_sota.py --epochs 3 --class-weight balanced --loss-type focal
+python run_transformer_sota.py --train-with-val --epochs 3 --class-weight balanced
+python run_transformer_sota.py --train-with-val --epochs 3 --sampler-weight-power 0.5
+python run_transformer_sota.py --train-with-val --epochs 3 --augment-minority 2
+
+# RoBERTa 变体
+python run_transformer_sota.py --model-name hfl/chinese-roberta-wwm-ext --run-name roberta_base --train-with-val --epochs 3
+
+# 不保存每 epoch checkpoint（仅最佳模型）
+python run_transformer_sota.py --train-with-val --epochs 3 --no-save-every-epoch
+
+# 加载已保存模型评估
+python run_transformer_sota.py --load --run-name macbert_base_+val --save-predictions --adv
+python run_transformer_sota.py --load --run-name macbert_base_+val_cwbalanced_focal1.5 --save-predictions --adv
+```
+
+#### 模型集成
+
+```bash
+# 自动发现模型 + 调优权重（调优后自动保存配置到 saved_models/）
+python run_ensemble_sota.py --discover --auto-tune --save-predictions --name ensemble_auto
+
+# 加载已保存配置直接评估（无需重新调优）
+python run_ensemble_sota.py --load-config --name ensemble_auto --save-predictions
+
+# 含对抗评估
+python run_ensemble_sota.py --load-config --name ensemble_auto --save-predictions --adv
+
+# 自定义调优目标
+python run_ensemble_sota.py --discover --auto-tune --objective balanced_pr --name ensemble_balanced
+python run_ensemble_sota.py --discover --auto-tune --objective f1_macro --name ensemble_f1
+
+# 手动指定模型和权重
+python run_ensemble_sota.py --models model1_test model2_test --weights 1.0 0.5 --save-predictions
+```
+
+### 5. 可视化与后处理
+
+```bash
+# ===== 可视化（混淆矩阵/模型对比/学习曲线）=====
 python visualize.py
 
-# ===== 二分类后处理 =====
+# ===== 二分类后处理（10分类→2分类）=====
 python postprocess_binary.py
 
-# ===== 对抗数据集生成 =====
+# ===== 生成对抗数据集 =====
 python make_adversarial_dataset.py
 ```
 
