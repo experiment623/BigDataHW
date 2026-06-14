@@ -41,15 +41,39 @@ def convert_to_binary(y_true, y_pred, confidence=None, proba_10=None):
     return y_true_bin, y_pred_bin, spam_conf
 
 
-def compute_binary_metrics(y_true_bin, y_pred_bin, spam_conf):
-    """计算二分类指标"""
+def compute_confidence_threshold_metrics(y_true_bin, y_pred_bin, spam_conf, percentile):
+    """计算置信度阈值指标：仅保留 spam_conf 最高的 (100-percentile)% 样本"""
+    threshold = np.percentile(spam_conf, percentile)
+    mask = spam_conf >= threshold
+    if mask.sum() == 0:
+        return {'recall': 0.0, 'precision': 0.0, 'f1': 0.0, 'coverage': 0.0}
+    y_true_filt = y_true_bin[mask]
+    y_pred_filt = y_pred_bin[mask]
     return {
+        'recall': round(recall_score(y_true_filt, y_pred_filt, zero_division=0), 4),
+        'precision': round(precision_score(y_true_filt, y_pred_filt, zero_division=0), 4),
+        'f1': round(f1_score(y_true_filt, y_pred_filt, zero_division=0), 4),
+        'coverage': round(mask.sum() / len(y_true_bin), 4),
+    }
+
+
+def compute_binary_metrics(y_true_bin, y_pred_bin, spam_conf):
+    """计算二分类指标（含置信度阈值指标）"""
+    metrics = {
         'binary_accuracy': round(accuracy_score(y_true_bin, y_pred_bin), 4),
         'binary_precision': round(precision_score(y_true_bin, y_pred_bin, zero_division=0), 4),
         'binary_recall': round(recall_score(y_true_bin, y_pred_bin, zero_division=0), 4),
         'binary_f1': round(f1_score(y_true_bin, y_pred_bin, zero_division=0), 4),
         'binary_auc': round(roc_auc_score(y_true_bin, spam_conf) if len(set(y_true_bin)) > 1 else 0.5, 4),
     }
+    # 置信度阈值指标
+    for pct, label in [(10, '90'), (5, '95')]:
+        thresh = compute_confidence_threshold_metrics(y_true_bin, y_pred_bin, spam_conf, pct)
+        metrics[f'binary_recall@{label}'] = thresh['recall']
+        metrics[f'binary_precision@{label}'] = thresh['precision']
+        metrics[f'binary_f1@{label}'] = thresh['f1']
+        metrics[f'binary_coverage@{label}'] = thresh['coverage']
+    return metrics
 
 
 def main():
@@ -88,7 +112,8 @@ def main():
 
                 all_results.append(metrics)
                 print(f'  {model_name}: Acc={metrics["binary_accuracy"]:.4f} '
-                      f'F1={metrics["binary_f1"]:.4f} AUC={metrics["binary_auc"]:.4f}')
+                      f'F1={metrics["binary_f1"]:.4f} AUC={metrics["binary_auc"]:.4f} '
+                      f'F1@90={metrics["binary_f1@90"]:.4f} F1@95={metrics["binary_f1@95"]:.4f}')
 
     if not all_results:
         print('[未找到任何 test_results.csv 文件]')
@@ -97,7 +122,10 @@ def main():
     # 汇总表
     df_summary = pd.DataFrame(all_results)
     cols_order = ['model', 'binary_accuracy', 'binary_precision', 'binary_recall',
-                  'binary_f1', 'binary_auc', 'n_samples', 'n_normal', 'n_spam']
+                  'binary_f1', 'binary_auc',
+                  'binary_recall@90', 'binary_precision@90', 'binary_f1@90', 'binary_coverage@90',
+                  'binary_recall@95', 'binary_precision@95', 'binary_f1@95', 'binary_coverage@95',
+                  'n_samples', 'n_normal', 'n_spam']
     df_summary = df_summary[[c for c in cols_order if c in df_summary.columns]]
     df_summary = df_summary.sort_values('binary_f1', ascending=False)
 

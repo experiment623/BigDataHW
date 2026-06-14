@@ -241,6 +241,23 @@ def save_result_csv(experiment, split, texts_raw, y_true, y_pred, proba, out_dir
     df.to_csv(os.path.join(out_dir, f'{split}_results.csv'), index=False, encoding='utf-8-sig')
 
 
+def save_score_csv_for_ensemble(experiment, y_true, y_pred, proba):
+    """保存 10 类概率 CSV 到 output/predictions/，供 ensemble 集成使用"""
+    pred_dir = os.path.join(OUTPUT_DIR, "predictions")
+    os.makedirs(pred_dir, exist_ok=True)
+    stem = f"{experiment}_test"
+    if proba is None:
+        proba = np.eye(10)[y_pred]
+    df = pd.DataFrame({
+        "id": np.arange(len(y_true)),
+        "label_true": y_true,
+        "label_pred": y_pred,
+        **{f"score_{i}": proba[:, i] for i in range(10)},
+    })
+    df.to_csv(os.path.join(pred_dir, f"{stem}.csv"), index=False, encoding="utf-8-sig")
+    print(f"  score csv saved: output/predictions/{stem}.csv")
+
+
 def save_metrics_csv(metrics_list: list[Metrics], out_path):
     df = pd.DataFrame([asdict(m) for m in metrics_list])
     df.to_csv(out_path, index=False, encoding='utf-8-sig')
@@ -339,6 +356,8 @@ def main():
                 out_dir = os.path.join(OUTPUT_DIR, experiment)
                 save_result_csv(experiment, split, raw_texts, y_true, y_pred, score, out_dir)
                 save_metrics_csv([metric], os.path.join(out_dir, f'{split}_metrics.csv'))
+                if split == "test" and score is not None:
+                    save_score_csv_for_ensemble(experiment, y_true, y_pred, score)
 
         # 对抗评估
         if args.adv and adv_df is not None and len(adv_texts_adv) > 0:

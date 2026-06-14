@@ -41,15 +41,25 @@ SOTA_TARGETS = {
     "f1_weighted": 0.948638,
 }
 
-DEFAULT_MODELS = [
+# 默认集成模型：Transformer 微调模型 + 字符 N-gram SOTA 模型（跨范式融合）
+DEFAULT_TRANSFORMER_MODELS = [
     "macbert_full_plus2022_bal_b64_epoch1_test",
     "macbert_50k_plus2022_bal_b32_epoch1_test",
     "macbert_full_plus2022_sqrt_b64_epoch1_test",
     "roberta_50k_plus2022_bal_b64_epoch1_test",
-    "char13_svc_120k_test",
-    "hash_char14_sgd_log_test",
 ]
-DEFAULT_WEIGHTS = [1.0, 1.0, 0.5, 1.0, 1.0, 1.0]
+DEFAULT_SOTA_MODELS = [
+    "char13_svc_120k_test",
+    "char14_svc_160k_test",
+    "char15_svc_c1_test",
+    "char25_svc_c1_test",
+    "char15_svc_c2_test",
+    "hash_char14_sgd_log_test",
+    "char15_sgd_log_test",
+    "char15_lr_saga_test",
+]
+DEFAULT_MODELS = DEFAULT_TRANSFORMER_MODELS + DEFAULT_SOTA_MODELS
+DEFAULT_WEIGHTS = [1.0, 1.0, 0.5, 1.0] + [1.0] * len(DEFAULT_SOTA_MODELS)
 DEFAULT_WEIGHT_MAP = dict(zip(DEFAULT_MODELS, DEFAULT_WEIGHTS))
 DEFAULT_FACTORS = [0.7, 16.0, 6.0, 4.0, 1.7, 16.0, 0.5, 1.3, 4.0, 0.7]
 

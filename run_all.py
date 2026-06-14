@@ -292,7 +292,7 @@ def run_transformer(args) -> int:
 
 
 def run_ensemble(args) -> int:
-    """运行 Ensemble 集成"""
+    """运行 Ensemble 集成（跨范式融合：Transformer + 字符 N-gram SOTA）"""
     cmd = [PYTHON, str(ENSEMBLE_SCRIPT)]
     cmd.extend(["--discover", "--name", args.ens_name])
     if args.ens_auto_tune:
@@ -306,7 +306,7 @@ def run_ensemble(args) -> int:
     if args.adv:
         cmd.append("--adv")
 
-    desc = f"Ensemble 集成 ({args.ens_name})" + (" [auto-tune]" if args.ens_auto_tune else " [load-config]")
+    desc = f"Ensemble 跨范式集成 ({args.ens_name})" + (" [auto-tune]" if args.ens_auto_tune else " [load-config]")
     return run_cmd(cmd, desc, args.dry_run)
 
 
