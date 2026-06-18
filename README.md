@@ -322,7 +322,7 @@ MacBERT 使用全词遮罩（Whole Word Masking）+ 纠错预训练，对中文�
 ## 依赖
 
 ```
-python>=3.8
+python>=3.8 (推荐python==3.12.7)
 pandas, numpy, scikit-learn, scipy
 jieba, gensim
 matplotlib, seaborn
@@ -330,6 +330,23 @@ torch, transformers
 pypinyin, Pillow, tqdm
 ```
 
-## 作者
+---
 
-大数据原理与技术 — 期末项目
+## 可视化
+
+1. 依赖（在上面的基础上添加）
+
+   ```
+   flask
+   ```
+
+​	其他依赖包括训练完成后的`output/`文件夹以及`saved_models/`文件夹，需要先`run_all`得到这些文件。
+
+2. 运行
+
+   该可视化为前后端不分离项目，使用`Flask+Jinja2`构建。
+
+   ```
+   python app.py
+
+​	随后打开`http://127.0.0.1:5000`。
