@@ -75,6 +75,7 @@ def clean_text(text: str) -> str:
 _model_cache: dict[str, object] = {}
 _cache_lock = threading.Lock()
 _loading_status: dict[str, str] = {}  # key -> "unloaded" | "loading" | "loaded" | "error"
+_texts_by_label: dict[int, list] | None = None  # 随机文本按标签分组缓存
 
 # ===================== 辅助函数 (从 run_ensemble_sota.py 移植) =====================
 
@@ -494,16 +495,23 @@ def api_predict():
 
 @app.route("/api/random-text")
 def api_random_text():
-    """返回数据集中随机一条文本"""
+    """返回数据集中随机一条文本（十个类别等概率均匀抽样）"""
     import random as _random
-    from data_processor import load_data
-    from config import TEST_PATH
-    texts, labels = load_data(TEST_PATH)
-    idx = _random.randint(0, len(texts) - 1)
+    global _texts_by_label
+    if _texts_by_label is None:
+        from data_processor import load_data
+        from config import TEST_PATH
+        texts, labels = load_data(TEST_PATH)
+        _texts_by_label = {l: [] for l in range(NUM_CLASSES)}
+        for t, l in zip(texts, labels):
+            _texts_by_label[int(l)].append(t)
+    label = _random.randint(0, NUM_CLASSES - 1)
+    pool = _texts_by_label[label]
+    text = pool[_random.randint(0, len(pool) - 1)]
     return jsonify({
-        "text": texts[idx],
-        "label": int(labels[idx]),
-        "label_name": LABEL_MAP[int(labels[idx])],
+        "text": text,
+        "label": label,
+        "label_name": LABEL_MAP[label],
     })
 
 
