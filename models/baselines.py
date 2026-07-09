@@ -1,11 +1,11 @@
 """
-论文五个经典 Baseline 模型
-===========================
-1. Word2Vec-w+LR:  基于分词(jieba)的 Word2Vec + LogisticRegression
-2. Word2Vec-c+LR:  基于字符分割的 Word2Vec + LogisticRegression
-3. Word2Vec-c+GBDT: 基于字符分割的 Word2Vec + GradientBoosting
-4. Doc2Vec-c+GBDT:  基于字符分割的 Doc2Vec + GradientBoosting
-5. GAS (GCN):       图卷积网络，学习词-文档共现关系
+经典 Baseline 模型实现
+=======================
+1. Word2Vec-w+LR:  分词 Word2Vec + LogisticRegression
+2. Word2Vec-c+LR:  字符级 Word2Vec + LogisticRegression
+3. Word2Vec-c+GBDT: 字符级 Word2Vec + HistGradientBoosting
+4. Doc2Vec-c+GBDT:  字符级 Doc2Vec + HistGradientBoosting
+5. GAS:             基于 MLP 的文本分类器（TF-IDF 特征）
 """
 import numpy as np
 import warnings
@@ -20,7 +20,7 @@ from .base import BaseModel
 # ==================== 1. Word2Vec-w+LR ====================
 
 class Word2VecWordLR(BaseModel):
-    """Word2Vec-w+LR: 基于 jieba 分词的 Word2Vec + LogisticRegression"""
+    """分词级 Word2Vec + LogisticRegression"""
     def __init__(self, vec_dim: int = 200, window: int = 5):
         super().__init__('Word2Vec-w+LR', input_type='text')
         self.vec_dim = vec_dim
@@ -120,7 +120,7 @@ class Word2VecWordLR(BaseModel):
 # ==================== 2. Word2Vec-c+LR ====================
 
 class Word2VecCharLR(BaseModel):
-    """Word2Vec-c+LR: 字符级 Word2Vec + LogisticRegression"""
+    """字符级 Word2Vec + LogisticRegression"""
     def __init__(self, vec_dim: int = 200, window: int = 3):
         super().__init__('Word2Vec-c+LR', input_type='text')
         self.vec_dim = vec_dim
@@ -214,7 +214,7 @@ class Word2VecCharLR(BaseModel):
 # ==================== 3. Word2Vec-c+GBDT ====================
 
 class Word2VecCharGBDT(BaseModel):
-    """Word2Vec-c+GBDT: 字符级 Word2Vec + HistGradientBoosting"""
+    """字符级 Word2Vec + HistGradientBoosting"""
     def __init__(self, vec_dim: int = 200, window: int = 3):
         super().__init__('Word2Vec-c+GBDT', input_type='text')
         self.vec_dim = vec_dim
@@ -308,7 +308,7 @@ class Word2VecCharGBDT(BaseModel):
 # ==================== 4. Doc2Vec-c+GBDT ====================
 
 class Doc2VecCharGBDT(BaseModel):
-    """Doc2Vec-c+GBDT: 字符级 Doc2Vec + HistGradientBoosting"""
+    """字符级 Doc2Vec + HistGradientBoosting"""
     def __init__(self, vec_dim: int = 200, window: int = 3, epochs: int = 20):
         super().__init__('Doc2Vec-c+GBDT', input_type='text')
         self.vec_dim = vec_dim
@@ -391,10 +391,7 @@ class Doc2VecCharGBDT(BaseModel):
 # ==================== 5. GAS (GCN-based) ====================
 
 class GAS(BaseModel):
-    """
-    GAS: Graph Aggregation and Summarization - 基于 GCN 的图神经网络文本分类
-    简化实现：用 TfidfVectorizer 特征 + 2 层 MLP + Dropout
-    """
+    """基于 TF-IDF 特征 + 两层 MLP + Dropout 的文本分类器"""
     def __init__(self, hidden_dim: int = 128, num_classes: int = NUM_CLASSES):
         super().__init__('GAS (GCN)')
         self.hidden_dim = hidden_dim

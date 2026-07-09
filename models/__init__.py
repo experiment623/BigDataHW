@@ -1,5 +1,5 @@
 """
-模型模块 — 5 个 Baseline 模型
+模型模块 — Baseline 模型与评估工具
 """
 from .base import BaseModel
 from .baselines import (

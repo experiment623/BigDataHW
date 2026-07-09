@@ -1,21 +1,17 @@
 """
-GPU Transformer fine-tuning for ChiFraud — MacBERT / RoBERTa
-=============================================================
-不同训练方式自动保存为不同模型（run_id 含关键参数）:
+Transformer 微调脚本 — MacBERT / RoBERTa
+=========================================
+基于预训练语言模型的垃圾文本分类微调。不同训练配置自动保存为不同模型目录。
+
+模型保存策略:
   - 每个 epoch 保存: saved_models/{run_id}_epoch{N}/
   - 最佳 F1 模型保存: saved_models/{run_id}/
 
 用法:
-  # 训练不同配置（自动保存到不同目录）
   python run_transformer_sota.py --train-with-val --epochs 3 --save-predictions --adv
   python run_transformer_sota.py --epochs 3 --class-weight balanced --loss-type focal
   python run_transformer_sota.py --train-with-val --epochs 3 --sampler-weight-power 0.5
-
-  # 加载已保存模型评估（指定 run_id）
   python run_transformer_sota.py --load --run-name macbert_base_+val --save-predictions --adv
-  python run_transformer_sota.py --load --run-name macbert_base_train_cwbalanced_focal1.5 --save-predictions --adv
-
-  # 只保存最佳模型（不加每 epoch 保存）
   python run_transformer_sota.py --train-with-val --epochs 3 --no-save-every-epoch
 """
 from __future__ import annotations
@@ -261,11 +257,11 @@ def parse_args():
     p.add_argument("--sampler-weight-power", type=float, default=0.0,
                    help=">0 时使用 WeightedRandomSampler，建议 0.35~0.75 增强少数类")
     p.add_argument("--sampler-epoch-size", type=int, default=0,
-                   help="WeightedRandomSampler 每个 epoch 抽样数，0 表示等于训练集大小")
+                   help="WeightedRandomSampler 每 epoch 抽样数，0 表示使用训练集大小")
     p.add_argument("--augment-minority", type=int, default=0,
-                   help="少数类文本扰动增强倍数；0 表示关闭")
+                   help="少数类文本扰动增强倍数，0 表示关闭")
     p.add_argument("--augment-labels", nargs="+", type=int, default=[3, 4, 8, 9],
-                   help="需要做文本扰动增强的标签")
+                   help="文本扰动增强的目标类别")
     p.add_argument("--seed", type=int, default=RANDOM_SEED)
     p.add_argument("--fp16", action="store_true", default=True)
     p.add_argument("--no-fp16", dest="fp16", action="store_false")
@@ -276,9 +272,9 @@ def parse_args():
     p.add_argument("--save-predictions", action="store_true")
     p.add_argument("--adv", action="store_true", help="含对抗评估")
     p.add_argument("--eval-test", action="store_true")
-    p.add_argument("--load", action="store_true", help="加载已保存模型直接评估（跳过训练）")
+    p.add_argument("--load", action="store_true", help="加载已保存模型直接评估")
     p.add_argument("--save-every-epoch", action="store_true", default=True,
-                   help="每个 epoch 都保存模型（默认开启）；--no-save-every-epoch 只保存最佳")
+                   help="每个 epoch 保存模型（默认开启），--no-save-every-epoch 仅保存最佳")
     p.add_argument("--no-save-every-epoch", dest="save_every_epoch", action="store_false")
     return p.parse_args()
 
@@ -336,7 +332,7 @@ def main():
         fit_texts, fit_y, args.augment_minority, args.augment_labels, args.seed
     )
 
-    # 构建唯一的 run_id：包含模型名 + 关键训练参数
+    # 根据训练参数构建唯一的 run_id
     def build_run_id(args) -> str:
         base = args.run_name.replace("/", "_")
         parts = [base]
@@ -377,7 +373,7 @@ def main():
         train_start = time.time()
         elapsed = time.time() - train_start
 
-        # 从 run_id 中提取 epoch（如果是 epoch 子模型）
+        # 从 run_id 中提取 epoch 编号
         epoch_label = 0
         if "_epoch" in run_id:
             try:
@@ -475,7 +471,7 @@ def main():
         print(f"test epoch={epoch}: acc={m_test['accuracy']:.4f} f1={m_test['f1_macro']:.4f} "
               f"f1@90={m_test['f1@90']:.4f} f1@95={m_test['f1@95']:.4f}")
 
-        # 保存每个 epoch 的模型
+        # 每个 epoch 保存模型权重
         if args.save_every_epoch:
             epoch_run_id = f"{run_id}_epoch{epoch}"
             try:
@@ -511,7 +507,7 @@ def main():
                     save_results(adv_texts_adv, y_adv, y_adv_pred, adv_proba, out_dir,
                                  f"adversarial_epoch{epoch}")
 
-    # 打印所有保存的模型
+    # 输出所有保存的模型路径
     if saved_run_ids:
         print(f"\n共保存 {len(saved_run_ids)} 个模型:")
         for rid in saved_run_ids:

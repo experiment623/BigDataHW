@@ -1,10 +1,11 @@
 """
-可视化脚本 — 混淆矩阵、模型对比、对抗鲁棒性、学习曲线
-===================================================
+可视化脚本 — 混淆矩阵、模型对比、置信度分布、对抗鲁棒性、学习曲线
+=================================================================
 用法:
   python visualize.py                    # 生成全部图表
   python visualize.py --type confusion   # 仅混淆矩阵
   python visualize.py --type compare     # 仅模型对比
+  python visualize.py --type adversarial # 仅对抗鲁棒性
 """
 import os, sys, json, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,7 +41,7 @@ CLASS_NAMES = [LABEL_MAP.get(i, str(i)) for i in range(NUM_CLASSES)]
 
 
 def plot_confusion_matrix(y_true, y_pred, title='Confusion Matrix', save_name='confusion_matrix.png'):
-    """混淆矩阵热力图"""
+    """绘制混淆矩阵（计数 + 行归一化）"""
     cm = confusion_matrix(y_true, y_pred, labels=range(NUM_CLASSES))
     cm_norm = cm.astype('float') / cm.sum(axis=1, keepdims=True).clip(min=1)
 
@@ -64,7 +65,7 @@ def plot_confusion_matrix(y_true, y_pred, title='Confusion Matrix', save_name='c
 
 
 def plot_per_class_f1(metrics_row, save_name='per_class_f1.png'):
-    """各类别 F1 柱状图"""
+    """绘制各类别 F1 分数柱状图"""
     if isinstance(metrics_row, str):
         per_f1 = json.loads(metrics_row)
     elif isinstance(metrics_row, dict):
@@ -95,10 +96,10 @@ def plot_per_class_f1(metrics_row, save_name='per_class_f1.png'):
 
 
 def plot_model_comparison():
-    """模型横向对比柱状图 — 读取所有 metrics.csv"""
+    """读取所有模型指标并绘制横向对比柱状图"""
     all_metrics = []
 
-    # 收集所有 test_metrics.csv
+    # 收集所有 test_metrics.csv / metrics.csv
     for root, dirs, files in os.walk(OUTPUT_DIR):
         for f in files:
             if f in ('test_metrics.csv', 'metrics.csv'):
@@ -113,7 +114,7 @@ def plot_model_comparison():
                 except Exception:
                     pass
 
-    # 也读取 sota_results.csv
+    # 同时读取 sota_results.csv
     sota_path = os.path.join(OUTPUT_DIR, 'sota_results.csv')
     if os.path.exists(sota_path):
         df_sota = pd.read_csv(sota_path, encoding='utf-8-sig')
@@ -162,7 +163,7 @@ def plot_model_comparison():
 
 
 def plot_confidence_distribution():
-    """置信度分布直方图 — 读取所有 test_results.csv"""
+    """读取所有 test_results.csv 并绘制置信度分布直方图"""
     all_conf = {}
     for root, dirs, files in os.walk(OUTPUT_DIR):
         for f in files:
@@ -214,7 +215,7 @@ def plot_confidence_distribution():
 
 
 def plot_learning_curve():
-    """学习曲线 — 读取 transformer metrics"""
+    """读取 Transformer 的 metrics.csv 并绘制 F1 随 epoch 变化曲线"""
     tf_path = os.path.join(OUTPUT_DIR, 'transformer_results.csv')
     for root, dirs, files in os.walk(OUTPUT_DIR):
         for f in files:
@@ -251,7 +252,7 @@ def plot_learning_curve():
 
 
 def plot_adversarial_robustness():
-    """对抗鲁棒性对比 — 读取各模型的 adversarial_metrics.csv"""
+    """读取各模型对抗评估指标并绘制鲁棒性对比柱状图"""
     all_adv = []
     for root, dirs, files in os.walk(OUTPUT_DIR):
         for f in files:
@@ -309,7 +310,7 @@ def plot_all():
     plot_learning_curve()
     plot_adversarial_robustness()
 
-    # 如果有 sota_results.csv，生成各类别 F1 图
+    # 如果有 sota_results.csv，生成各类别 F1 柱状图
     sota_path = os.path.join(OUTPUT_DIR, 'sota_results.csv')
     if os.path.exists(sota_path):
         df = pd.read_csv(sota_path, encoding='utf-8-sig')
@@ -319,7 +320,7 @@ def plot_all():
                 plot_per_class_f1(row['per_class_f1_json'], f'per_class_f1_{name}.png')
                 break
 
-    # 如果某个模型目录下有 test_results.csv，生成混淆矩阵
+    # 如果有 test_results.csv，生成混淆矩阵
     for root, dirs, files in os.walk(OUTPUT_DIR):
         for f in files:
             if f == 'test_results.csv':
@@ -359,5 +360,4 @@ if __name__ == '__main__':
                     plot_per_class_f1(row['per_class_f1_json'])
                     break
     else:
-        # 对单个 test_results.csv 画混淆矩阵
         print('用法: python visualize.py --type all')

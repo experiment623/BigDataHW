@@ -24,7 +24,7 @@ VAL_PATH = os.path.join(DATASET_DIR, 'ChiFraud_t2022.csv')
 TEST_PATH = os.path.join(DATASET_DIR, 'ChiFraud_t2023.csv')
 CLASS_TXT = os.path.join(DATASET_DIR, 'class.txt')
 
-# 类别映射（从 class.txt）
+# 类别映射
 LABEL_MAP = {
     0: '正常',
     1: '赌博博彩',
@@ -38,7 +38,7 @@ LABEL_MAP = {
     9: '地下黑贷',
 }
 
-NUM_CLASSES = 10  # 0-9 共10个类别
+NUM_CLASSES = 10
 
 # 数据预处理参数
 MAX_TEXT_LEN = 256
@@ -55,7 +55,7 @@ BERT_MODEL_NAME = 'hfl/chinese-macbert-base'
 ADVERSARIAL_RATIO = 0.3
 ADVERSARIAL_NUM = 200
 
-# 慢速模型（Word2Vec/Doc2Vec）的训练子集
+# 训练子集大小（用于加速 Word2Vec/Doc2Vec 和 BERT 训练）
 SUBSET_BASELINE_TRAIN = 30000
 SUBSET_BERT_TRAIN = 20000
 SUBSET_BERT_VAL = 5000

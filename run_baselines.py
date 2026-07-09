@@ -1,13 +1,15 @@
 """
-论文 5 个 Baseline 统一运行脚本
-===============================
+Baseline 模型统一运行脚本
+==========================
+训练和评估 5 个经典 Baseline 模型。
+
 用法:
-  python run_baselines.py                        # 训练全部5个(子集)
+  python run_baselines.py                        # 训练全部 5 个（子集）
   python run_baselines.py --models w2v_c gas     # 指定模型
   python run_baselines.py --full                 # 全量训练集
   python run_baselines.py --adv                  # 含对抗评估
-  python run_baselines.py --load                 # 加载已保存模型直接评估
-  python run_baselines.py --load --models w2v_c  # 加载指定已保存模型
+  python run_baselines.py --load                 # 加载已保存模型评估
+  python run_baselines.py --load --models w2v_c  # 加载指定模型
 """
 from __future__ import annotations
 import os, sys, time, argparse
@@ -37,12 +39,12 @@ MODELS_MAP = {
 
 def evaluate_and_save(model, model_key, test_texts, y_test, adv_df, adv_texts, y_adv,
                       tfidf_vec, out_dir, train_time):
-    """统一评估：测试集 + 对抗集"""
+    """评估模型并在测试集和对抗集上保存预测结果与指标"""
     is_gas = (model_key == 'gas')
 
     results = {}
 
-    # ── 测试集评估 ──
+    # 测试集评估
     if is_gas:
         X_test_t = tfidf_vec.transform(preprocess_texts(test_texts))
         y_pred = model.predict(X_test_t)
@@ -58,7 +60,7 @@ def evaluate_and_save(model, model_key, test_texts, y_test, adv_df, adv_texts, y
     save_metrics_csv(metrics, os.path.join(out_dir, 'test_metrics.csv'))
     results['test'] = metrics
 
-    # ── 对抗集评估 ──
+    # 对抗集评估
     if adv_df is not None and len(adv_texts) > 0:
         if is_gas:
             X_adv_t = tfidf_vec.transform(preprocess_texts(adv_texts))
@@ -95,7 +97,7 @@ def run_baseline(model_key, train_texts, y_train, val_texts, y_val,
     is_gas = (model_key == 'gas')
     model_path = get_model_path(model_key)
 
-    # ── 加载已有模型 ──
+    # 加载已有模型
     if load_model:
         if not os.path.exists(model_path):
             print(f'\n[{display_name}] 未找到已保存模型: {model_path}，跳过')
@@ -133,8 +135,8 @@ def run_baseline(model_key, train_texts, y_train, val_texts, y_val,
             print(f'  对抗集 -> Acc={am["accuracy"]:.4f} F1={am["f1_macro"]:.4f}')
         return results
 
-    # ── 训练新模型 ──
-    # 子集采样 (GAS 也采样加速)
+    # 训练新模型
+    # 子集采样以加速训练
     if not use_full:
         sub_texts, sub_y = stratified_sample(train_texts, y_train, SUBSET_BASELINE_TRAIN)
         print(f'\n[{display_name}] 子集采样: {len(sub_texts)} 条')
@@ -142,7 +144,7 @@ def run_baseline(model_key, train_texts, y_train, val_texts, y_val,
         sub_texts, sub_y = train_texts, y_train
         print(f'\n[{display_name}] 全量训练: {len(sub_texts)} 条')
 
-    # 构建 TF-IDF (GAS 需要)
+    # 为 GAS 构建 TF-IDF 特征
     tfidf_vec = None
     if is_gas:
         print(f'  构建 TF-IDF...')
@@ -196,9 +198,9 @@ def main():
     parser = argparse.ArgumentParser(description='运行论文 5 个 Baseline')
     parser.add_argument('--models', nargs='+', default=['all'],
                         choices=['all', 'w2v_w', 'w2v_c', 'w2v_gbdt', 'd2v_gbdt', 'gas'])
-    parser.add_argument('--full', action='store_true', help='使用全量训练集')
+    parser.add_argument('--full', action='store_true', help='使用全量训练集（默认使用 30000 子集）')
     parser.add_argument('--adv', action='store_true', help='含对抗评估')
-    parser.add_argument('--load', action='store_true', help='加载已保存模型直接评估（跳过训练）')
+    parser.add_argument('--load', action='store_true', help='加载已保存模型直接评估')
     args = parser.parse_args()
 
     models_to_run = list(MODELS_MAP.keys()) if args.models == ['all'] else args.models
@@ -231,8 +233,7 @@ def main():
         if res:
             all_test_metrics.append(res['test'])
 
-    # 汇总
-    if all_test_metrics:
+    # 输出汇总表
         print('\n' + '=' * 60)
         print('  Baseline 模型对比汇总')
         print('=' * 60)

@@ -1,11 +1,13 @@
 """
-Strong ChiFraud SOTA experiments — 字符级 N-gram + 强分类器
-============================================================
+字符级 N-gram 模型 — 强分类器实验
+==================================
+基于字符 N-gram TF-IDF 特征，搭配 LinearSVC / SGDClassifier / LogisticRegression。
+
 用法:
-  python run_sota.py --experiments char15_svc_c1         # 跑单个
-  python run_sota.py --experiments all                   # 全跑
+  python run_sota.py --experiments char15_svc_c1           # 单个实验
+  python run_sota.py --experiments all                     # 全部 8 个实验
   python run_sota.py --experiments all --save-predictions --adv
-  python run_sota.py --experiments all --load            # 加载已保存模型评估
+  python run_sota.py --experiments all --load              # 加载已保存模型评估
 """
 from __future__ import annotations
 
@@ -242,7 +244,7 @@ def save_result_csv(experiment, split, texts_raw, y_true, y_pred, proba, out_dir
 
 
 def save_score_csv_for_ensemble(experiment, y_true, y_pred, proba):
-    """保存 10 类概率 CSV 到 output/predictions/，供 ensemble 集成使用"""
+    """保存 10 类概率 CSV 到 output/predictions/，供集成阶段使用"""
     pred_dir = os.path.join(OUTPUT_DIR, "predictions")
     os.makedirs(pred_dir, exist_ok=True)
     stem = f"{experiment}_test"
@@ -267,11 +269,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run strong ChiFraud SOTA experiments.")
     parser.add_argument("--experiments", nargs="+", default=["char15_svc_c1"],
                         help="Experiment names. Use 'all' for the full CPU set.")
-    parser.add_argument("--no-exact-fallback", action="store_true")
-    parser.add_argument("--save-predictions", action="store_true")
-    parser.add_argument("--train-with-val", action="store_true")
+    parser.add_argument("--no-exact-fallback", action="store_true",
+                        help="关闭精确文本匹配回退")
+    parser.add_argument("--save-predictions", action="store_true",
+                        help="保存预测结果 CSV")
+    parser.add_argument("--train-with-val", action="store_true",
+                        help="合并训练集和验证集训练")
     parser.add_argument("--adv", action="store_true", help="含对抗评估")
-    parser.add_argument("--load", action="store_true", help="加载已保存模型直接评估（跳过训练）")
+    parser.add_argument("--load", action="store_true", help="加载已保存模型直接评估")
     parser.add_argument("--limit-train", type=int, default=0)
     parser.add_argument("--limit-eval", type=int, default=0)
     return parser.parse_args()

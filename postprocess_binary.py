@@ -1,8 +1,8 @@
 """
-后处理脚本：十分类 → 二分类转换
-================================
-读取所有模型的 test_results.csv，将 label>0 映射为 spam，
-计算二分类指标并输出汇总表。
+十分类 → 二分类转换脚本
+========================
+读取各模型的 test_results.csv，将 label>0 统一映射为垃圾类，
+计算二分类指标（准确率、精确率、召回率、F1、AUC）并输出汇总表。
 
 用法:
   python postprocess_binary.py
@@ -17,7 +17,6 @@ from sklearn.metrics import (
 )
 from config import OUTPUT_DIR
 
-# 尝试导入 proba 相关（对抗数据不适用）
 try:
     from run_sota import load_split
 except ImportError:
@@ -25,15 +24,14 @@ except ImportError:
 
 
 def convert_to_binary(y_true, y_pred, confidence=None, proba_10=None):
-    """十分类 → 二分类：label 0=正常, label>0=垃圾"""
+    """将十分类预测转换为二分类（正常 vs 垃圾）"""
     y_true_bin = (y_true > 0).astype(int)
     y_pred_bin = (y_pred > 0).astype(int)
 
-    # 二分类置信度：垃圾类概率之和
+    # 计算垃圾类置信度
     if proba_10 is not None:
         spam_conf = proba_10[:, 1:].sum(axis=1)
     elif confidence is not None:
-        # 保守估计：如果预测正确，用原置信度；否则用 1-confidence
         spam_conf = np.where(y_pred_bin == 1, confidence, 1 - confidence)
     else:
         spam_conf = np.ones(len(y_true_bin))
@@ -42,7 +40,7 @@ def convert_to_binary(y_true, y_pred, confidence=None, proba_10=None):
 
 
 def compute_confidence_threshold_metrics(y_true_bin, y_pred_bin, spam_conf, percentile):
-    """计算置信度阈值指标：仅保留 spam_conf 最高的 (100-percentile)% 样本"""
+    """在给定置信度分位数阈值下计算二分类指标"""
     threshold = np.percentile(spam_conf, percentile)
     mask = spam_conf >= threshold
     if mask.sum() == 0:
@@ -58,7 +56,7 @@ def compute_confidence_threshold_metrics(y_true_bin, y_pred_bin, spam_conf, perc
 
 
 def compute_binary_metrics(y_true_bin, y_pred_bin, spam_conf):
-    """计算二分类指标（含置信度阈值指标）"""
+    """计算二分类指标，含置信度阈值下的 Recall@K / Precision@K / F1@K"""
     metrics = {
         'binary_accuracy': round(accuracy_score(y_true_bin, y_pred_bin), 4),
         'binary_precision': round(precision_score(y_true_bin, y_pred_bin, zero_division=0), 4),
@@ -66,7 +64,6 @@ def compute_binary_metrics(y_true_bin, y_pred_bin, spam_conf):
         'binary_f1': round(f1_score(y_true_bin, y_pred_bin, zero_division=0), 4),
         'binary_auc': round(roc_auc_score(y_true_bin, spam_conf) if len(set(y_true_bin)) > 1 else 0.5, 4),
     }
-    # 置信度阈值指标
     for pct, label in [(10, '90'), (5, '95')]:
         thresh = compute_confidence_threshold_metrics(y_true_bin, y_pred_bin, spam_conf, pct)
         metrics[f'binary_recall@{label}'] = thresh['recall']

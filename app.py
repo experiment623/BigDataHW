@@ -2,7 +2,7 @@
 ChiFraud 垃圾文本多模型对比系统
 ================================
 Flask + Jinja2 构建，支持 8 个模型并行对比预测。
-明星模型: ensemble_cross (22模型加权融合)
+旗舰模型: ensemble_cross（跨范式加权集成）
 """
 
 from __future__ import annotations
@@ -18,19 +18,19 @@ import numpy as np
 import torch
 from flask import Flask, render_template, request, jsonify
 
-# ── sklearn 跨版本 pickle 兼容 ──
+# ── sklearn 跨版本 pickle 兼容层 ──
 import sys as _sys
 import warnings as _warnings
 _warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
-# 1. SGDClassifier loss='log_loss' 旧版引用 Log 类
+# sklearn 跨版本兼容：SGDClassifier(loss='log_loss') 需要 _sgd_fast.Log
 import sklearn.linear_model._sgd_fast as _sgd_fast
 if not hasattr(_sgd_fast, "Log"):
     class _DummyLog:
         pass
     _sgd_fast.Log = _DummyLog
 
-# 2. HistGradientBoostingClassifier 旧版 pickle 引用顶层 _loss 模块
+# sklearn 跨版本兼容：HistGradientBoostingClassifier 需要 _loss 模块
 try:
     import sklearn._loss._loss as _loss_ext
     _sys.modules["_loss"] = _loss_ext
@@ -77,7 +77,7 @@ _cache_lock = threading.Lock()
 _loading_status: dict[str, str] = {}  # key -> "unloaded" | "loading" | "loaded" | "error"
 _texts_by_label: dict[int, list] | None = None  # 随机文本按标签分组缓存
 
-# ===================== 辅助函数 (从 run_ensemble_sota.py 移植) =====================
+# ===================== 集成辅助函数 =====================
 
 def weighted_average(score_stack: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """多模型概率加权平均 (score_stack shape: [N_models, N_samples, N_classes])"""
@@ -133,16 +133,16 @@ def _load_gas():
     import pickle
     model = GAS()
     model.load(str(SAVED_MODELS_DIR / "gas.pth"))
-    # 使用预训练的 TF-IDF vectorizer，避免每次 predict_proba 新建导致维度不匹配
+    # 加载预训练的 TF-IDF vectorizer，确保 predict 阶段维度一致
     model._tfidf_vec = pickle.load(open(str(OUTPUT_DIR / "gas" / "tfidf_vec.pkl"), "rb"))
 
-    # 保存原始方法并替换为使用预训练 vectorizer 的版本
+    # 包装 predict_proba / predict，统一使用预训练 vectorizer 进行文本转换
     _orig_predict_proba = model.predict_proba
     _orig_predict = model.predict
     _tfidf = model._tfidf_vec
 
     def _patched_predict_proba(X):
-        """使用预训练 vectorizer 转换文本后预测概率"""
+        """通过预训练 vectorizer 转换文本，输出类别概率"""
         if isinstance(X[0], str):
             X_sp = _tfidf.transform(X)
             X_dense = X_sp.toarray() if hasattr(X_sp, "toarray") else X_sp
@@ -153,7 +153,7 @@ def _load_gas():
         return _orig_predict_proba(X_dense)
 
     def _patched_predict(X):
-        """使用预训练 vectorizer 转换文本后预测标签"""
+        """通过预训练 vectorizer 转换文本，输出预测标签"""
         if isinstance(X[0], str):
             X_sp = _tfidf.transform(X)
             X_dense = X_sp.toarray() if hasattr(X_sp, "toarray") else X_sp
@@ -169,7 +169,7 @@ def _load_gas():
 
 
 def _load_char15_sgd_log():
-    """加载 sklearn Pipeline（兼容不同 sklearn 版本）"""
+    """加载字符 N-gram sklearn Pipeline 模型"""
     from run_sota import load_sota_model
     return load_sota_model("char15_sgd_log")
 
@@ -189,15 +189,14 @@ def _load_macbert_cwb():
 
 
 def _load_ensemble_cross():
-    """加载 ensemble_cross 所需全部 22 个子模型 + 集成配置"""
-    # 1. 加载配置
+    """加载跨范式集成所需全部子模型和配置"""
+    # 加载集成配置
     with open(str(SAVED_MODELS_DIR / "ensemble_ensemble_cross.json"), "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # 2. 解析子模型
-    sub_models = {}  # name -> loaded model
+    # 按配置加载各子模型
+    sub_models = {}
     for csv_name in config["models"]:
-        # csv_name 形如 "char13_svc_120k_test" 或 "macbert_base_+val_aug2_epoch1_test"
         sub_models[csv_name] = _load_ensemble_submodel(csv_name)
 
     return {"config": config, "sub_models": sub_models}
@@ -205,12 +204,11 @@ def _load_ensemble_cross():
 
 def _load_ensemble_submodel(csv_name: str):
     """根据预测 CSV 文件名加载对应模型"""
-    # 去掉 _test 后缀得到模型 key
     model_key = csv_name
     if model_key.endswith("_test"):
         model_key = model_key[:-5]
 
-    # 字符 N-gram SOTA 模型
+    # 字符 N-gram 模型
     if model_key in {"char13_svc_120k", "char14_svc_160k", "char15_lr_saga",
                       "char15_sgd_log", "char15_svc_c1", "char15_svc_c2",
                       "char25_svc_c1", "hash_char14_sgd_log"}:
@@ -351,22 +349,22 @@ def _predict_transformer(model_info: dict, text: str) -> np.ndarray:
 
 
 def _predict_ensemble_cross(model_info: dict, text: str) -> np.ndarray:
-    """ensemble_cross: 22 模型加权融合"""
+    """跨范式加权集成：字符 N-gram + Transformer 模型概率融合"""
     config = model_info["config"]
     sub_models = model_info["sub_models"]
 
-    # 逐个模型预测，收集概率向量
+    # 收集各子模型的概率预测
     score_list = []
     for csv_name in config["models"]:
         sub = sub_models[csv_name]
         if sub["type"] == "sota":
             proba = _predict_sota(sub["model"], text)
-        else:  # transformer
+        else:
             proba = _predict_transformer(sub, text)
         score_list.append(proba)
 
-    # 加权融合
-    score_stack = np.stack(score_list, axis=0)  # [22, 10]
+    # 加权平均融合 + per-class 因子调整
+    score_stack = np.stack(score_list, axis=0)
     weights = np.array(config["weights"], dtype=np.float64)
     factors = np.array(config["factors"], dtype=np.float64)
 
@@ -377,7 +375,7 @@ def _predict_ensemble_cross(model_info: dict, text: str) -> np.ndarray:
 
 
 def predict_single(model_key: str, text: str) -> dict:
-    """对单条文本执行预测，返回统一格式的结果字典"""
+    """单条文本预测，返回统一格式结果"""
     ensure_loaded(model_key)
     model = _model_cache[model_key]
     model_type = MODEL_REGISTRY[model_key]["type"]
@@ -398,7 +396,7 @@ def predict_single(model_key: str, text: str) -> dict:
     pred_label = int(np.argmax(proba))
     confidence = round(float(np.max(proba)), 4)
 
-    # Top-3 概率
+    # 取 Top-3 预测概率
     top_indices = np.argsort(proba)[::-1][:3]
     proba_list = [
         {"label": int(i), "label_name": LABEL_MAP[int(i)], "prob": round(float(proba[i]), 4)}
@@ -418,8 +416,7 @@ def predict_single(model_key: str, text: str) -> dict:
 
 
 def predict_batch(model_keys: list[str], texts: list[str]) -> list[dict]:
-    """批量预测: 每条文本 × 每个模型"""
-    # 先确保所有模型已加载（并行首条文本触发加载）
+    """批量预测：每条文本依次过所有模型"""
     for key in model_keys:
         ensure_loaded(key)
 
@@ -456,7 +453,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    """主页：文本输入 + 模型选择（左侧），结果展示（右侧）"""
+    """主页：左侧文本输入与模型选择，右侧预测结果展示"""
     models_meta = [
         {"key": k, "display": v["display"], "star": v["star"], "type": v["type"]}
         for k, v in MODEL_REGISTRY.items()
@@ -466,7 +463,7 @@ def index():
 
 @app.route("/api/predict", methods=["POST"])
 def api_predict():
-    """JSON API：执行预测并返回结果"""
+    """预测 API：接收文本和模型列表，返回预测结果"""
     texts_raw = request.form.get("texts", "")
     selected_models = request.form.getlist("models")
 
@@ -495,7 +492,7 @@ def api_predict():
 
 @app.route("/api/random-text")
 def api_random_text():
-    """返回数据集中随机一条文本（十个类别等概率均匀抽样）"""
+    """随机抽样 API：从测试集按类别均匀抽取一条文本"""
     import random as _random
     global _texts_by_label
     if _texts_by_label is None:
@@ -517,7 +514,7 @@ def api_random_text():
 
 @app.route("/api/status")
 def api_status():
-    """返回模型加载状态"""
+    """状态查询 API：返回各模型的加载状态"""
     return jsonify(get_loading_status())
 
 

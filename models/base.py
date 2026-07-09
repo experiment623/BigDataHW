@@ -1,21 +1,21 @@
 """
-模型基类
+模型基类 — 定义训练、预测、序列化的统一接口
 """
 import pickle
 import numpy as np
 
 
 class BaseModel:
-    """所有模型的基类
+    """所有模型的基类，提供 fit / predict / predict_proba / save / load 接口。
 
-    input_type 定义模型的期望输入格式:
-        'tfidf' - 接受 TF-IDF 稀疏/稠密矩阵
-        'text'  - 接受原始文本字符串列表
+    input_type 指定模型接受的输入格式：
+        'tfidf' — TF-IDF 稀疏或稠密矩阵
+        'text'  — 原始文本字符串列表
     """
     def __init__(self, name: str, input_type: str = 'tfidf'):
         self.name = name
         self.model = None
-        self.input_type = input_type  # 'tfidf' 或 'text'
+        self.input_type = input_type
 
     def fit(self, X, y):
         raise NotImplementedError

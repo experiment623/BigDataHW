@@ -1,5 +1,5 @@
 """
-评估工具模块 — 含置信度阈值指标 + 统一输出格式
+评估工具模块 — 标准指标、置信度阈值指标、K-Fold 交叉验证、结果保存
 """
 import os, json
 import numpy as np
@@ -13,7 +13,7 @@ from config import LABEL_MAP, N_FOLDS, RANDOM_SEED, NUM_CLASSES
 
 
 def evaluate_model(model, X, y, label_names=None):
-    """基础评估：打印指标并返回 dict"""
+    """计算并打印基本分类指标，返回指标字典"""
     pred = model.predict(X)
     y = np.array(y)
     pred = np.array(pred)
@@ -44,7 +44,7 @@ def evaluate_model(model, X, y, label_names=None):
 
 
 def evaluate_with_confidence_threshold(model, X, y, threshold=0.90):
-    """在特定置信度阈值下评估"""
+    """在指定置信度阈值下评估（仅保留高置信度样本）"""
     y = np.array(y)
     proba = model.predict_proba(X)
     pred = np.argmax(proba, axis=1)
@@ -73,13 +73,12 @@ def evaluate_with_confidence_threshold(model, X, y, threshold=0.90):
 
 
 def compute_metrics_full(model_name, y_true, y_pred, proba, train_time_s=0, predict_time_s=0):
-    """完整指标计算，包含置信度阈值指标"""
+    """计算完整指标集合：准确率、宏平均/加权 F1、置信度阈值指标、各类别 F1"""
     per_f1 = f1_score(y_true, y_pred, labels=list(range(NUM_CLASSES)), average=None, zero_division=0)
     per_recall = recall_score(y_true, y_pred, labels=list(range(NUM_CLASSES)), average=None, zero_division=0)
     per_precision = precision_score(y_true, y_pred, labels=list(range(NUM_CLASSES)), average=None, zero_division=0)
 
     confidence = np.max(proba, axis=1)
-    # 按置信度排序，取百分位阈值
     sorted_conf = np.sort(confidence)[::-1]
     th90 = sorted_conf[min(int(len(sorted_conf) * 0.10), len(sorted_conf) - 1)]
     th95 = sorted_conf[min(int(len(sorted_conf) * 0.05), len(sorted_conf) - 1)]
@@ -118,7 +117,7 @@ def compute_metrics_full(model_name, y_true, y_pred, proba, train_time_s=0, pred
 
 
 def save_predictions_csv(texts, y_true, y_pred, confidences, output_path):
-    """保存预测结果 CSV：text, true_label, pred_label, confidence"""
+    """保存预测结果到 CSV（text / true_label / pred_label / confidence）"""
     df = pd.DataFrame({
         'text': [str(t)[:200] for t in texts],
         'true_label': y_true,
@@ -131,7 +130,7 @@ def save_predictions_csv(texts, y_true, y_pred, confidences, output_path):
 
 
 def save_metrics_csv(metrics_dict, output_path):
-    """保存指标 CSV"""
+    """保存单行指标到 CSV 文件"""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     df = pd.DataFrame([metrics_dict])
     df.to_csv(output_path, index=False, encoding='utf-8-sig')
@@ -139,7 +138,7 @@ def save_metrics_csv(metrics_dict, output_path):
 
 
 def compare_models(results: list, dataset_name: str = ''):
-    """模型对比汇总"""
+    """打印并返回模型对比汇总表"""
     df = pd.DataFrame(results)
     print(f'\n{"="*70}')
     print(f'  模型对比汇总 ({dataset_name})')
@@ -149,7 +148,7 @@ def compare_models(results: list, dataset_name: str = ''):
 
 
 def cross_validate(model_factory, X, y, n_folds=N_FOLDS, verbose=True):
-    """K-Fold 分层交叉验证"""
+    """分层 K-Fold 交叉验证，返回各折指标和均值 ± 标准差"""
     kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_SEED)
     y = np.array(y)
     metrics_list = []

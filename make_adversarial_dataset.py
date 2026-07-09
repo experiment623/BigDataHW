@@ -187,12 +187,11 @@ ATTACK_STRATEGIES = [
     (5, 'add_filler', '正常文本伪装',   lambda t: add_filler_text(t)),
     (6, 'num_obf',    '数字全角混淆',   lambda t: number_obfuscation(t)),
     (7, 'url_obf',    '伪装URL添加',    lambda t: url_obfuscation(t)),
-    (8, 'pinyin_abv', '拼音字母简写',   lambda t: pinyin_abbreviation(t)),  # 新增
+    (8, 'pinyin_abv', '拼音字母简写',   lambda t: pinyin_abbreviation(t)),
 ]
 
-# 正常文本: 仅做轻微扰动; 欺诈文本: 全部 8 种攻击
-# 这里用 dict comprehension 确保所有标签都有正确分配
-ATTACK_TARGET_MAP = {0: [3, 4]}  # 正常: 插入+掩码
+# 正常文本仅做轻微扰动；欺诈文本应用全部 8 种攻击策略
+ATTACK_TARGET_MAP = {0: [3, 4]}
 ATTACK_TARGET_MAP.update({l: [1, 2, 3, 4, 5, 6, 7, 8] for l in range(1, 10)})
 
 
@@ -290,7 +289,7 @@ def make_adversarial_dataset(samples_per_class: int = 200, use_all: bool = False
 
     # ---- 5. 生成并保存向量化版本 ----
     print(f'\n[5/5] 预计算 TF-IDF 向量化...')
-    # 用训练集构建 vectorizer（保证一致性）
+    # 使用训练集构建 vectorizer，确保训练-对抗阶段特征空间一致
     train_texts, _ = load_data(TRAIN_PATH)
     train_tokens = preprocess_texts(train_texts)
     vectorizer = build_tfidf_vectorizer(

@@ -1,27 +1,16 @@
 """
 ChiFraud 全流程一键运行脚本
 ============================
-顺序运行 Baseline → SOTA → Transformer → Ensemble，
-每个阶段生成标准测试集 + 对抗数据集预测，自动保存模型权重和评估指标。
+按 Baseline → SOTA → Transformer → Ensemble 顺序执行，
+每个阶段生成测试集与对抗数据集预测，自动保存模型和评估指标。
 
 用法:
-  # 完整训练（推荐首次运行）
-  python run_all.py
-
-  # 跳过训练，仅用已保存模型评估
-  python run_all.py --load
-
-  # 并行运行（Windows）
-  python run_all.py --parallel
-
-  # 自定义 Transformer 配置
+  python run_all.py                                          # 首次完整训练
+  python run_all.py --load                                   # 仅评估已保存模型
+  python run_all.py --parallel                               # 并行运行各阶段
   python run_all.py --tf-epochs 3 --tf-train-with-val --tf-class-weight balanced
-
-  # 运行指定阶段
-  python run_all.py --stages baseline sota
-
-  # 完整训练 + 对抗评估 + 预测文件 + ensemble
-  python run_all.py --adv --save-predictions --ensemble
+  python run_all.py --stages baseline sota                   # 指定阶段
+  python run_all.py --adv --save-predictions --ensemble      # 含对抗+预测+集成
 """
 from __future__ import annotations
 
@@ -184,7 +173,7 @@ def get_tf_configs(args) -> list[dict]:
     for cfg in configs:
         cfg_args = cfg["args"]
         if args.tf_epochs is not None:
-            # 找到 --epochs 并替换
+        # 找到 --epochs 参数位置并覆盖
             for i, a in enumerate(cfg_args):
                 if a == "--epochs" and i + 1 < len(cfg_args):
                     cfg_args[i + 1] = str(args.tf_epochs)
@@ -240,7 +229,7 @@ def run_cmd(cmd: list[str], desc: str, dry_run: bool = False) -> int:
 
 
 def run_baselines(args) -> int:
-    """运行 Baseline 模型（不支持 --save-predictions，仅传 --adv）"""
+    """运行 Baseline 模型"""
     cmd = [PYTHON, str(BASELINE_SCRIPT)]
     if args.load:
         cmd.append("--load")
@@ -254,7 +243,7 @@ def run_baselines(args) -> int:
 
 
 def run_sota(args) -> int:
-    """运行 SOTA 模型"""
+    """运行字符 N-gram 模型（8 个 sklearn Pipeline）"""
     common = build_common_args(args)
     cmd = [PYTHON, str(SOTA_SCRIPT)]
     if args.load:
@@ -263,11 +252,11 @@ def run_sota(args) -> int:
     if args.sota_train_with_val:
         cmd.append("--train-with-val")
     cmd.extend(common)
-    return run_cmd(cmd, "SOTA 模型 (8 个 sklearn Pipeline)", args.dry_run)
+    return run_cmd(cmd, "字符 N-gram 模型 (8 个 sklearn Pipeline)", args.dry_run)
 
 
 def run_transformer(args) -> int:
-    """运行 Transformer 模型（多个配置）"""
+    """运行 Transformer 模型（MacBERT / RoBERTa，多配置）"""
     configs = get_tf_configs(args)
     if not configs:
         print("  [跳过] 没有 Transformer 配置")
@@ -292,7 +281,7 @@ def run_transformer(args) -> int:
 
 
 def run_ensemble(args) -> int:
-    """运行 Ensemble 集成（跨范式融合：Transformer + 字符 N-gram SOTA）"""
+    """运行跨范式集成（Transformer + 字符 N-gram）"""
     cmd = [PYTHON, str(ENSEMBLE_SCRIPT)]
     cmd.extend(["--discover", "--name", args.ens_name])
     if args.ens_auto_tune:

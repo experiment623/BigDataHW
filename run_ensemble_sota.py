@@ -1,20 +1,14 @@
 """
-ChiFraud 多模型加权集成
-=======================
-集成配置自动保存到 saved_models/ensemble_{name}.json
+ChiFraud 跨范式多模型加权集成
+==============================
+集成 Transformer 与字符 N-gram 模型的预测概率，通过加权平均
+和 per-class 因子调整得到最终预测。配置自动保存至 saved_models/。
 
 用法:
-  # 默认配置运行
-  python run_ensemble_sota.py --save-predictions
-
-  # 自动发现模型 + 调优（调优后自动保存配置）
-  python run_ensemble_sota.py --discover --auto-tune --save-predictions --name ensemble_auto
-
-  # 加载已保存配置直接评估（无需重新调优）
-  python run_ensemble_sota.py --load-config --name ensemble_auto --save-predictions
-
-  # 手动指定模型和权重
-  python run_ensemble_sota.py --models model1_test model2_test --weights 1.0 1.0
+  python run_ensemble_sota.py --save-predictions                                    # 默认配置
+  python run_ensemble_sota.py --discover --auto-tune --save-predictions --name ensemble_auto  # 自动调优
+  python run_ensemble_sota.py --load-config --name ensemble_auto --save-predictions  # 加载已保存配置
+  python run_ensemble_sota.py --models model1_test model2_test --weights 1.0 1.0    # 手动指定
 """
 from __future__ import annotations
 
@@ -32,7 +26,7 @@ SAVED_MODELS_DIR = Path("saved_models")
 LABELS = list(range(10))
 SCORE_COLS = [f"score_{label}" for label in LABELS]
 
-# 已知 baseline 最高值，用于 --objective sota_margin 的约束式搜索。
+# SOTA 模型的已知指标上限，用于约束式搜索的目标参考
 SOTA_TARGETS = {
     "accuracy": 0.927208,
     "precision_macro": 0.936659,
@@ -41,7 +35,7 @@ SOTA_TARGETS = {
     "f1_weighted": 0.948638,
 }
 
-# 默认集成模型：Transformer 微调模型 + 字符 N-gram SOTA 模型（跨范式融合）
+# 默认集成模型列表：Transformer 微调 + 字符 N-gram，跨范式融合
 DEFAULT_TRANSFORMER_MODELS = [
     "macbert_full_plus2022_bal_b64_epoch1_test",
     "macbert_50k_plus2022_bal_b32_epoch1_test",
@@ -428,7 +422,7 @@ def main():
             y_true, score_stack, weights, factors,
             args.objective, args.search_rounds, args.random_trials, args.seed,
         )
-        # 调优后自动保存配置
+        # 调优完成后保存配置
         config_to_save = {
             "models": model_names,
             "weights": [round(float(v), 8) for v in weights],

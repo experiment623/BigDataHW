@@ -1,5 +1,5 @@
 """
-数据处理模块：数据加载、清洗、预处理
+数据处理模块：文本加载、清洗、分词、TF-IDF 向量化
 """
 import re
 import numpy as np
@@ -31,7 +31,7 @@ def tokenize(text: str) -> str:
 
 
 def load_data(filepath: str, text_col: str = 'Text', label_col: str = 'Label_id') -> tuple:
-    """加载 tab 分隔的 CSV 数据，返回 (texts_list, labels_array)"""
+    """加载 tab 分隔的 CSV，返回 (texts_list, labels_array)"""
     df = pd.read_csv(filepath, sep='\t', encoding='utf-8')
     if label_col not in df.columns or text_col not in df.columns:
         raise ValueError(f"列名不匹配，实际列: {list(df.columns)}")
@@ -88,7 +88,7 @@ def stratified_sample_indices(labels, n_samples, random_state=42):
 
 
 def load_adversarial_data():
-    """加载对抗测试集，返回 (df, adv_texts_list, y_labels_array)"""
+    """加载对抗测试集，返回 (DataFrame, texts_list, labels_array)"""
     adv_path = os.path.join(DATASET_DIR, 'adversarial_test.csv')
     if not os.path.exists(adv_path):
         print(f'[跳过] 对抗测试集不存在: {adv_path}')
